@@ -54,16 +54,16 @@ func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 			return
 		}
 
-		path_parts := strings.Split(req.URL.Path, "/")
+		pathParts := strings.Split(req.URL.Path, "/")
 
-		if len(path_parts) != 5 {
-			http.Error(res, "Invalid path format", http.StatusBadRequest)
+		if len(pathParts) != 5 {
+			http.Error(res, "Invalid path format", http.StatusNotFound)
 			return
 		}
 
-		typeOfMetric := path_parts[2]
-		nameOfMetric := path_parts[3]
-		valueOfMetric := path_parts[4]
+		typeOfMetric := pathParts[2]
+		nameOfMetric := pathParts[3]
+		valueOfMetric := pathParts[4]
 
 		switch typeOfMetric {
 		case "gauge":
