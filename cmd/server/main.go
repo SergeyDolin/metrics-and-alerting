@@ -38,10 +38,6 @@ func middleware(next http.Handler) http.Handler {
 	})
 }
 
-func rootHandler(res http.ResponseWriter, req *http.Request) {
-	res.Write([]byte("Hello! This is root page of 'metrics-and-alerting' project"))
-}
-
 func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
@@ -94,8 +90,8 @@ func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 func main() {
 	mux := http.NewServeMux()
 	ms := createMetricStorage()
-	mux.Handle(`/`, middleware(http.HandlerFunc(rootHandler)))
-	mux.Handle(`/update/`, middleware(http.HandlerFunc(postHandler(ms))))
+
+	mux.Handle(`/update`, middleware(http.HandlerFunc(postHandler(ms))))
 
 	err := http.ListenAndServe(`:8080`, mux)
 	if err != nil {
