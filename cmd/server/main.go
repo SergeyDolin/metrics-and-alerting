@@ -91,7 +91,7 @@ func main() {
 	mux := http.NewServeMux()
 	ms := createMetricStorage()
 
-	mux.Handle(`/update`, middleware(http.HandlerFunc(postHandler(ms))))
+	mux.Handle(`/update/{type}/{name}/{value}`, middleware(http.HandlerFunc(postHandler(ms))))
 
 	err := http.ListenAndServe(`:8080`, mux)
 	if err != nil {
