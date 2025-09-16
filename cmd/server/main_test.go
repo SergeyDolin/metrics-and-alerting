@@ -5,12 +5,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi"
 	"github.com/stretchr/testify/assert"
 )
 
 func Test_postHandler(t *testing.T) {
 	ms := createMetricStorage()
-	handler := postHandler(ms) // Получаем обработчик
+
+	router := chi.NewRouter()
+	router.Post("/update/{type}/{name}/{value}", http.HandlerFunc(postHandler(ms)))
 
 	tests := []struct {
 		name            string
@@ -104,7 +107,7 @@ func Test_postHandler(t *testing.T) {
 			req.Header.Set("Content-Type", tt.contentType)
 
 			rr := httptest.NewRecorder()
-			handler(rr, req)
+			router.ServeHTTP(rr, req)
 
 			assert.Equal(t, tt.expectedStatus, rr.Code, "HTTP status not equal")
 
