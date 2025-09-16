@@ -145,9 +145,9 @@ func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 			return
 		}
 
-		typeOfMetric := pathParts[2]
-		nameOfMetric := pathParts[3]
-		valueOfMetric := pathParts[4]
+		typeOfMetric := strings.ToLower(chi.URLParam(req, "type"))
+		nameOfMetric := chi.URLParam(req, "name")
+		valueOfMetric := chi.URLParam(req, "value")
 
 		switch typeOfMetric {
 		case "gauge":
