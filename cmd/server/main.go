@@ -133,10 +133,10 @@ func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 			return
 		}
 
-		// if req.Header.Get("Content-Type") != "text/plain" {
-		// 	http.Error(res, "Invalid Content-Type", http.StatusBadRequest)
-		// 	return
-		// }
+		if req.Header.Get("Content-Type") != "text/plain" {
+			http.Error(res, "Invalid Content-Type", http.StatusBadRequest)
+			return
+		}
 
 		typeOfMetric := strings.ToLower(chi.URLParam(req, "type"))
 		nameOfMetric := chi.URLParam(req, "name")
