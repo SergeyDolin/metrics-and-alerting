@@ -138,13 +138,6 @@ func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 			return
 		}
 
-		pathParts := strings.Split(req.URL.Path, "/")
-
-		if len(pathParts) != 5 {
-			http.Error(res, "Invalid path format", http.StatusNotFound)
-			return
-		}
-
 		typeOfMetric := strings.ToLower(chi.URLParam(req, "type"))
 		nameOfMetric := chi.URLParam(req, "name")
 		valueOfMetric := chi.URLParam(req, "value")
@@ -178,6 +171,14 @@ func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 func main() {
 	router := chi.NewRouter()
 	ms := createMetricStorage()
+
+	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Only POST request allowed!", http.StatusMethodNotAllowed)
+	})
+
+	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Invalid path format", http.StatusNotFound)
+	})
 
 	router.Route("/", func(r chi.Router) {
 		r.Get("/", indexHandler(ms))

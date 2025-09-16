@@ -13,6 +13,15 @@ func Test_postHandler(t *testing.T) {
 	ms := createMetricStorage()
 
 	router := chi.NewRouter()
+
+	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Only POST request allowed!", http.StatusMethodNotAllowed)
+	})
+
+	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Invalid path format", http.StatusNotFound)
+	})
+
 	router.Post("/update/{type}/{name}/{value}", http.HandlerFunc(postHandler(ms)))
 
 	tests := []struct {
