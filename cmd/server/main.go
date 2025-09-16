@@ -11,39 +11,6 @@ import (
 	"github.com/go-chi/chi"
 )
 
-const (
-	metricCount = 26
-)
-
-var MetricNames = [metricCount]string{
-	"Alloc",
-	"BuckHashSys",
-	"Frees",
-	"GCCPUFraction",
-	"GCSys",
-	"HeapAlloc",
-	"HeapIdle",
-	"HeapObjects",
-	"HeapReleased",
-	"HeapSys",
-	"LastGC",
-	"Lookups",
-	"MCacheInuse",
-	"MCacheSys",
-	"MSpanSys",
-	"Mallocs",
-	"NextGC",
-	"NumForcedGC",
-	"NumGC",
-	"OtherSys",
-	"PauseTotalNs",
-	"StackInuse",
-	"Sys",
-	"TotalAlloc",
-	"PollCount",
-	"RandomValue",
-}
-
 type MetricStorage struct {
 	gauge   map[string]float64
 	counter map[string]int64
@@ -57,9 +24,6 @@ func createMetricStorage() *MetricStorage {
 }
 
 func (ms *MetricStorage) updateGauge(name string, value float64) {
-	if _, ok := ms.gauge[name]; !ok {
-		ms.gauge[name] = 0
-	}
 	ms.gauge[name] = value
 }
 
@@ -99,21 +63,17 @@ func getHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 
 		switch metricType {
 		case "gauge":
-			for _, metric := range MetricNames {
-				if metric == metricName {
-					io.WriteString(res, fmt.Sprintf("%s=%v", metricName, ms.gauge[metricName]))
-					return
-				}
+			if value, exists := ms.gauge[metricName]; exists {
+				io.WriteString(res, fmt.Sprintf("%v", value))
+				return
 			}
 			http.Error(res, "Unknown metric name", http.StatusNotFound)
 			return
 
 		case "counter":
-			for _, metric := range MetricNames {
-				if metric == metricName {
-					io.WriteString(res, fmt.Sprintf("%s=%v", metricName, ms.counter[metricName]))
-					return
-				}
+			if value, exists := ms.counter[metricName]; exists {
+				io.WriteString(res, fmt.Sprintf("%v", value))
+				return
 			}
 			http.Error(res, "Unknown metric name", http.StatusNotFound)
 			return
@@ -122,7 +82,6 @@ func getHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 			http.Error(res, "Unknown metric type", http.StatusNotFound)
 			return
 		}
-
 	}
 }
 
@@ -178,7 +137,7 @@ func main() {
 	ms := createMetricStorage()
 
 	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "Only POST request allowed!", http.StatusMethodNotAllowed)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	})
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
@@ -188,14 +147,12 @@ func main() {
 	router.Route("/", func(r chi.Router) {
 		r.Get("/", indexHandler(ms))
 		r.Route("/update", func(r chi.Router) {
-			r.Post("/{type}/{name}/{value}", http.HandlerFunc(postHandler(ms)))
+			r.Post("/{type}/{name}/{value}", postHandler(ms))
 		})
-		// http://<АДРЕС_СЕРВЕРА>/value/<ТИП_МЕТРИКИ>/<ИМЯ_МЕТРИКИ>
 		r.Route("/value", func(r chi.Router) {
-			r.Get("/{type}/{name}", http.HandlerFunc(getHandler(ms)))
+			r.Get("/{type}/{name}", getHandler(ms))
 		})
 	})
 
 	log.Fatal(http.ListenAndServe(":8080", router))
-
 }
