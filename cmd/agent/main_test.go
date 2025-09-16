@@ -109,7 +109,7 @@ func Test_sendMetric(t *testing.T) {
 			}
 
 			if tt.metric.serverAddr == "localhost:12345" && err != nil {
-				assert.Contains(t, err.Error(), "connection refused")
+				assert.Contains(t, err.Error(), "actively refused it")
 			}
 		})
 	}

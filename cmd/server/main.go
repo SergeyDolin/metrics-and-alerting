@@ -11,6 +11,39 @@ import (
 	"github.com/go-chi/chi"
 )
 
+const (
+	metricCount = 26
+)
+
+var MetricNames = [metricCount]string{
+	"Alloc",
+	"BuckHashSys",
+	"Frees",
+	"GCCPUFraction",
+	"GCSys",
+	"HeapAlloc",
+	"HeapIdle",
+	"HeapObjects",
+	"HeapReleased",
+	"HeapSys",
+	"LastGC",
+	"Lookups",
+	"MCacheInuse",
+	"MCacheSys",
+	"MSpanSys",
+	"Mallocs",
+	"NextGC",
+	"NumForcedGC",
+	"NumGC",
+	"OtherSys",
+	"PauseTotalNs",
+	"StackInuse",
+	"Sys",
+	"TotalAlloc",
+	"PollCount",
+	"RandomValue",
+}
+
 type MetricStorage struct {
 	gauge   map[string]float64
 	counter map[string]int64
@@ -61,17 +94,29 @@ func getHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 			return
 		}
 
-		metric_type := strings.ToLower(chi.URLParam(req, "type"))
-		metric_name := chi.URLParam(req, "name")
+		metricType := strings.ToLower(chi.URLParam(req, "type"))
+		metricName := chi.URLParam(req, "name")
 
-		switch metric_type {
+		switch metricType {
 		case "gauge":
-			io.WriteString(res, fmt.Sprintf("%s=%v", metric_name, ms.gauge[metric_name]))
-			res.WriteHeader(http.StatusOK)
+			for _, metric := range MetricNames {
+				if metric == metricName {
+					io.WriteString(res, fmt.Sprintf("%s=%v", metricName, ms.gauge[metricName]))
+					return
+				}
+			}
+			http.Error(res, "Unknown metric name", http.StatusNotFound)
+			return
 
 		case "counter":
-			io.WriteString(res, fmt.Sprintf("%s=%v", metric_name, ms.counter[metric_name]))
-			res.WriteHeader(http.StatusOK)
+			for _, metric := range MetricNames {
+				if metric == metricName {
+					io.WriteString(res, fmt.Sprintf("%s=%v", metricName, ms.counter[metricName]))
+					return
+				}
+			}
+			http.Error(res, "Unknown metric name", http.StatusNotFound)
+			return
 
 		default:
 			http.Error(res, "Unknown metric type", http.StatusNotFound)
