@@ -1,9 +1,14 @@
 package main
 
 import (
+	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/go-chi/chi"
 )
 
 type MetricStorage struct {
@@ -32,10 +37,48 @@ func (ms *MetricStorage) updateCounter(name string, value int64) {
 	ms.counter[name] += value
 }
 
-func middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
-		next.ServeHTTP(res, req)
-	})
+func indexHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
+	return func(res http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet {
+			http.Error(res, "Only GET request allowed!", http.StatusMethodNotAllowed)
+			return
+		}
+		list := make([]string, 0)
+		for name, value := range ms.gauge {
+			list = append(list, fmt.Sprintf("%s=%v", name, value))
+		}
+		for name, value := range ms.counter {
+			list = append(list, fmt.Sprintf("%s=%v", name, value))
+		}
+		io.WriteString(res, strings.Join(list, ", "))
+	}
+}
+
+func getHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
+	return func(res http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet {
+			http.Error(res, "Only GET request allowed!", http.StatusMethodNotAllowed)
+			return
+		}
+
+		metric_type := strings.ToLower(chi.URLParam(req, "type"))
+		metric_name := chi.URLParam(req, "name")
+
+		switch metric_type {
+		case "gauge":
+			io.WriteString(res, fmt.Sprintf("%s=%v", metric_name, ms.gauge[metric_name]))
+			res.WriteHeader(http.StatusOK)
+
+		case "counter":
+			io.WriteString(res, fmt.Sprintf("%s=%v", metric_name, ms.counter[metric_name]))
+			res.WriteHeader(http.StatusOK)
+
+		default:
+			http.Error(res, "Unknown metric type", http.StatusNotFound)
+			return
+		}
+
+	}
 }
 
 func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
@@ -70,7 +113,7 @@ func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 			}
 			ms.updateGauge(nameOfMetric, value)
 			res.WriteHeader(http.StatusOK)
-			// fmt.Fprintf(res, "Gauge metric %s updated to %f", nameOfMetric, value)
+
 		case "counter":
 			value, err := strconv.ParseInt(valueOfMetric, 10, 64)
 			if err != nil {
@@ -79,7 +122,7 @@ func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 			}
 			ms.updateCounter(nameOfMetric, value)
 			res.WriteHeader(http.StatusOK)
-			// fmt.Fprintf(res, "Counter metric %s updated to %d", nameOfMetric, value)
+
 		default:
 			http.Error(res, "Unknown metric type", http.StatusBadRequest)
 			return
@@ -88,13 +131,20 @@ func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 }
 
 func main() {
-	mux := http.NewServeMux()
+	router := chi.NewRouter()
 	ms := createMetricStorage()
 
-	mux.Handle(`/update/{type}/{name}/{value}`, middleware(http.HandlerFunc(postHandler(ms))))
+	router.Route("/", func(r chi.Router) {
+		r.Get("/", indexHandler(ms))
+		r.Route("/update", func(r chi.Router) {
+			r.Post("/{type}/{name}/{value}", http.HandlerFunc(postHandler(ms)))
+		})
+		// http://<АДРЕС_СЕРВЕРА>/value/<ТИП_МЕТРИКИ>/<ИМЯ_МЕТРИКИ>
+		r.Route("/value", func(r chi.Router) {
+			r.Get("/{type}/{name}", http.HandlerFunc(getHandler(ms)))
+		})
+	})
 
-	err := http.ListenAndServe(`:8080`, mux)
-	if err != nil {
-		panic(err)
-	}
+	log.Fatal(http.ListenAndServe(":8080", router))
+
 }
