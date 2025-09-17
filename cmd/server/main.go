@@ -92,22 +92,16 @@ func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 			return
 		}
 
-		if req.Header.Get("Content-Type") != "text/plain" {
-			http.Error(res, "Invalid Content-Type", http.StatusBadRequest)
-			return
-		}
-
 		typeOfMetric := strings.ToLower(chi.URLParam(req, "type"))
 		nameOfMetric := chi.URLParam(req, "name")
 		valueOfMetric := chi.URLParam(req, "value")
 
-		if typeOfMetric == "" || nameOfMetric == "" || valueOfMetric == "" {
-			http.Error(res, "Missing required parameters", http.StatusBadRequest)
-			return
-		}
-
 		switch typeOfMetric {
 		case "gauge":
+			if req.Header.Get("Content-Type") != "text/plain" {
+				http.Error(res, "Invalid Content-Type", http.StatusBadRequest)
+				return
+			}
 			value, err := strconv.ParseFloat(valueOfMetric, 64)
 			if err != nil {
 				http.Error(res, "Only Float type for Gauge allowed!", http.StatusBadRequest)
