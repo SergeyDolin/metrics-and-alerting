@@ -68,14 +68,6 @@ func Test_postHandler(t *testing.T) {
 			expectedStatus: http.StatusMethodNotAllowed,
 			expectedBody:   "Only POST request allowed!",
 		},
-		// {
-		// 	name:           "Invalid content type",
-		// 	method:         http.MethodPost,
-		// 	contentType:    "application/json",
-		// 	url:            "/update/gauge/temp/1.0",
-		// 	expectedStatus: http.StatusBadRequest,
-		// 	expectedBody:   "Invalid Content-Type",
-		// },
 		{
 			name:           "Invalid path format",
 			method:         http.MethodPost,
