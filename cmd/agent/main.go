@@ -1,11 +1,19 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"math/rand"
 	"net/http"
 	"runtime"
 	"time"
+)
+
+// -a=localhost:8080 -r=10 (reportInterval) -p=2 (pollInterval)
+var (
+	sAddr     = flag.String("a", "localhost:8080", "address and port to run server")
+	pInterval = flag.Int("r", 10, "reportInterval set")
+	rInterval = flag.Int("p", 2, "pollInterval set")
 )
 
 type MetricStorage struct {
@@ -73,20 +81,21 @@ func sendMetric(name, typeMetric string, value string, serverAddr string) error 
 }
 
 func main() {
+	flag.Parse()
 	ms := createMetricStorage()
 
-	serverAddr := "localhost:8080"
+	serverAddr := *sAddr
 
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-
-	pollInterval := 2 * time.Second
-	reportInterval := 10 * time.Second
+	pollInterval := time.Duration(*pInterval) * time.Second
+	reportInterval := time.Duration(*rInterval) * time.Second
 	lastReport := time.Now()
 
 	ms.getMetrics(&m)
 	for {
 		time.Sleep(pollInterval)
+		runtime.ReadMemStats(&m)
 		ms.getMetrics(&m)
 
 		if time.Since(lastReport) >= reportInterval {

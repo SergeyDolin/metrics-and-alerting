@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -11,11 +12,27 @@ import (
 	"github.com/go-chi/chi"
 )
 
-type MetricStorage struct {
-	gauge   map[string]float64
-	counter map[string]int64
+// переменная flagRunAddr содержит адрес и порт для запуска сервера
+var flagRunAddr string
+
+// parseFlags обрабатывает аргументы командной строки
+// и сохраняет их значения в соответствующих переменных
+func parseFlags() {
+	// регистрируем переменную flagRunAddr
+	// как аргумент -a со значением localhost:8080 по умолчанию
+	flag.StringVar(&flagRunAddr, "a", "localhost:8080", "address and port to run server")
+	// парсим переданные серверу аргументы в зарегистрированные переменные
+	flag.Parse()
 }
 
+// MetricStorage — структура для хранения метрик двух типов: gauge (произвольное значение) и counter (счётчик, только инкремент)
+type MetricStorage struct {
+	gauge   map[string]float64 // Хранит метрики типа gauge (например использование памяти)
+	counter map[string]int64   // Хранит метрики типа counter (например количество запросов или ошибок)
+}
+
+// createMetricStorage — создаёт и инициализирует новый экземпляр хранилища метрик.
+// Возвращает указатель на MetricStorage с инициализированными пустыми мапами для gauge и counter.
 func createMetricStorage() *MetricStorage {
 	return &MetricStorage{
 		gauge:   make(map[string]float64),
@@ -23,10 +40,15 @@ func createMetricStorage() *MetricStorage {
 	}
 }
 
+// updateGauge — обновляет или устанавливает значение метрики типа gauge по имени.
+// Перезаписывает текущее значение, если оно существует.
 func (ms *MetricStorage) updateGauge(name string, value float64) {
 	ms.gauge[name] = value
 }
 
+// updateCounter — обновляет значение метрики типа counter по имени.
+// Если метрика ещё не существует — инициализирует её нулём, затем прибавляет переданное значение.
+// Counter предназначен для накопления, а не перезаписи.
 func (ms *MetricStorage) updateCounter(name string, value int64) {
 	if _, ok := ms.counter[name]; !ok {
 		ms.counter[name] = 0
@@ -34,6 +56,9 @@ func (ms *MetricStorage) updateCounter(name string, value int64) {
 	ms.counter[name] += value
 }
 
+// indexHandler — возвращает HTTP-обработчик, который выводит все метрики (gauge и counter) в виде строки.
+// Формат: "metric1=value1, metric2=value2, ..."
+// Поддерживает только GET-запросы. При других методах возвращает ошибку 405.
 func indexHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodGet {
@@ -51,6 +76,10 @@ func indexHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 	}
 }
 
+// getHandler — возвращает HTTP-обработчик для получения значения конкретной метрики по типу и имени.
+// URL: /value/{type}/{name}
+// Поддерживает только GET. Возвращает значение метрики или ошибку 404, если метрика не найдена.
+// Типы: "gauge" или "counter". Регистр не важен.
 func getHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodGet {
@@ -85,6 +114,12 @@ func getHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 	}
 }
 
+// postHandler — возвращает HTTP-обработчик для обновления метрик через POST-запрос.
+// URL: /update/{type}/{name}/{value}
+// Поддерживает только POST. Валидирует тип значения в зависимости от типа метрики:
+// - gauge: требует float64
+// - counter: требует int64
+// При успехе возвращает 200 OK, при ошибках — соответствующие HTTP-ошибки.
 func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
@@ -122,7 +157,16 @@ func postHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 	}
 }
 
+// main — точка входа приложения.
+// Инициализирует роутер chi, создаёт хранилище метрик и настраивает маршруты:
+// - GET / — список всех метрик
+// - POST /update/{type}/{name}/{value} — обновление метрики
+// - GET /value/{type}/{name} — получение значения метрики
+// Запускает HTTP-сервер на порту 8080.
+// Также задаёт глобальные обработчики для MethodNotAllowed и NotFound.
 func main() {
+	parseFlags()
+
 	router := chi.NewRouter()
 	ms := createMetricStorage()
 
@@ -143,6 +187,6 @@ func main() {
 			r.Get("/{type}/{name}", getHandler(ms))
 		})
 	})
-
-	log.Fatal(http.ListenAndServe(":8080", router))
+	fmt.Println("Running server on", flagRunAddr)
+	log.Fatal(http.ListenAndServe(flagRunAddr, router))
 }
