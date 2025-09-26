@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+var сlient = &http.Client{}
+
 // -a=localhost:8080 -r=10 (reportInterval) -p=2 (pollInterval)
 var (
 	sAddr     = flag.String("a", "localhost:8080", "address and port to run server")
@@ -28,31 +30,37 @@ func createMetricStorage() *MetricStorage {
 	}
 }
 
+var fieldMap = map[string]func(*runtime.MemStats) float64{
+	"Alloc":         func(m *runtime.MemStats) float64 { return float64(m.Alloc) },
+	"BuckHashSys":   func(m *runtime.MemStats) float64 { return float64(m.BuckHashSys) },
+	"Frees":         func(m *runtime.MemStats) float64 { return float64(m.Frees) },
+	"GCCPUFraction": func(m *runtime.MemStats) float64 { return float64(m.GCCPUFraction) },
+	"GCSys":         func(m *runtime.MemStats) float64 { return float64(m.GCSys) },
+	"HeapAlloc":     func(m *runtime.MemStats) float64 { return float64(m.HeapAlloc) },
+	"HeapIdle":      func(m *runtime.MemStats) float64 { return float64(m.HeapIdle) },
+	"HeapObjects":   func(m *runtime.MemStats) float64 { return float64(m.HeapObjects) },
+	"HeapReleased":  func(m *runtime.MemStats) float64 { return float64(m.HeapReleased) },
+	"HeapSys":       func(m *runtime.MemStats) float64 { return float64(m.HeapSys) },
+	"LastGC":        func(m *runtime.MemStats) float64 { return float64(m.LastGC) },
+	"Lookups":       func(m *runtime.MemStats) float64 { return float64(m.Lookups) },
+	"MCacheInuse":   func(m *runtime.MemStats) float64 { return float64(m.MCacheInuse) },
+	"MCacheSys":     func(m *runtime.MemStats) float64 { return float64(m.MCacheSys) },
+	"MSpanSys":      func(m *runtime.MemStats) float64 { return float64(m.MSpanSys) },
+	"Mallocs":       func(m *runtime.MemStats) float64 { return float64(m.Mallocs) },
+	"NextGC":        func(m *runtime.MemStats) float64 { return float64(m.NextGC) },
+	"NumForcedGC":   func(m *runtime.MemStats) float64 { return float64(m.NumForcedGC) },
+	"NumGC":         func(m *runtime.MemStats) float64 { return float64(m.NumGC) },
+	"OtherSys":      func(m *runtime.MemStats) float64 { return float64(m.OtherSys) },
+	"PauseTotalNs":  func(m *runtime.MemStats) float64 { return float64(m.PauseTotalNs) },
+	"StackInuse":    func(m *runtime.MemStats) float64 { return float64(m.StackInuse) },
+	"Sys":           func(m *runtime.MemStats) float64 { return float64(m.Sys) },
+	"TotalAlloc":    func(m *runtime.MemStats) float64 { return float64(m.TotalAlloc) },
+}
+
 func (ms *MetricStorage) getMetrics(m *runtime.MemStats) {
-	ms.gauge["Alloc"] = float64(m.Alloc)
-	ms.gauge["BuckHashSys"] = float64(m.BuckHashSys)
-	ms.gauge["Frees"] = float64(m.Frees)
-	ms.gauge["GCCPUFraction"] = float64(m.GCCPUFraction)
-	ms.gauge["GCSys"] = float64(m.GCSys)
-	ms.gauge["HeapAlloc"] = float64(m.HeapAlloc)
-	ms.gauge["HeapIdle"] = float64(m.HeapIdle)
-	ms.gauge["HeapObjects"] = float64(m.HeapObjects)
-	ms.gauge["HeapReleased"] = float64(m.HeapReleased)
-	ms.gauge["HeapSys"] = float64(m.HeapSys)
-	ms.gauge["LastGC"] = float64(m.LastGC)
-	ms.gauge["Lookups"] = float64(m.Lookups)
-	ms.gauge["MCacheInuse"] = float64(m.MCacheInuse)
-	ms.gauge["MCacheSys"] = float64(m.MCacheSys)
-	ms.gauge["MSpanSys"] = float64(m.MSpanSys)
-	ms.gauge["Mallocs"] = float64(m.Mallocs)
-	ms.gauge["NextGC"] = float64(m.NextGC)
-	ms.gauge["NumForcedGC"] = float64(m.NumForcedGC)
-	ms.gauge["NumGC"] = float64(m.NumGC)
-	ms.gauge["OtherSys"] = float64(m.OtherSys)
-	ms.gauge["PauseTotalNs"] = float64(m.PauseTotalNs)
-	ms.gauge["StackInuse"] = float64(m.StackInuse)
-	ms.gauge["Sys"] = float64(m.Sys)
-	ms.gauge["TotalAlloc"] = float64(m.TotalAlloc)
+	for name, metric := range fieldMap {
+		ms.gauge[name] = metric(m)
+	}
 	ms.counter["PollCount"]++
 	ms.gauge["RandomValue"] = rand.Float64()
 }
@@ -67,8 +75,7 @@ func sendMetric(name, typeMetric string, value string, serverAddr string) error 
 	}
 	req.Header.Set("Content-Type", "text/plain")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := сlient.Do(req)
 	if err != nil {
 		return fmt.Errorf("response error: %v", err)
 	}
