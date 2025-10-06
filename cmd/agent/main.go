@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -10,13 +9,6 @@ import (
 )
 
 var сlient = &http.Client{}
-
-// -a=localhost:8080 -r=10 (reportInterval) -p=2 (pollInterval)
-var (
-	sAddr     = flag.String("a", "localhost:8080", "address and port to run server")
-	pInterval = flag.Int("r", 10, "reportInterval set")
-	rInterval = flag.Int("p", 2, "pollInterval set")
-)
 
 type MetricStorage struct {
 	gauge   map[string]float64
@@ -88,7 +80,7 @@ func sendMetric(name, typeMetric string, value string, serverAddr string) error 
 }
 
 func main() {
-	flag.Parse()
+	parseArgs()
 	ms := createMetricStorage()
 
 	serverAddr := *sAddr
