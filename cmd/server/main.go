@@ -1,10 +1,11 @@
 package main
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/go-chi/chi"
+
+	"go.uber.org/zap"
 )
 
 // main — точка входа приложения.
@@ -17,11 +18,19 @@ import (
 func main() {
 	parseFlags()
 
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		panic("cannot initialize zap")
+	}
+	defer logger.Sync()
+
+	sugar := logger.Sugar()
+
 	router := chi.NewRouter()
 	ms := createMetricStorage()
 
-	router.Use(recoverMiddleware)
-	router.Use(logMiddleware)
+	// router.Use(recoverMiddleware(sugar))
+	router.Use(logMiddleware(sugar))
 
 	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -40,6 +49,6 @@ func main() {
 			r.Get("/{type}/{name}", getHandler(ms))
 		})
 	})
-	log.Printf("Running server on %s", flagRunAddr)
-	log.Fatal(http.ListenAndServe(flagRunAddr, router))
+	sugar.Infof("Running server on %s", flagRunAddr)
+	sugar.Fatal(http.ListenAndServe(flagRunAddr, router))
 }

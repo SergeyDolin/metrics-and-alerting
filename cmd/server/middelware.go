@@ -1,57 +1,59 @@
 package main
 
 import (
-	"log"
 	"net/http"
 	"time"
+
+	"go.uber.org/zap"
 )
 
-// loggingResponseWriter — обёртка для перехвата HTTP-статуса
-type loggingResponseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-func (lrw *loggingResponseWriter) WriteHeader(code int) {
-	lrw.statusCode = code
-	lrw.ResponseWriter.WriteHeader(code)
-}
-
-func (lrw *loggingResponseWriter) Write(b []byte) (int, error) {
-	if lrw.statusCode == 0 {
-		lrw.statusCode = http.StatusOK // если не вызвали WriteHeader — считаем 200
+type (
+	responseData struct {
+		status int
+		size   int
 	}
-	return lrw.ResponseWriter.Write(b)
+
+	loggingResponseWriter struct {
+		http.ResponseWriter
+		responseData *responseData
+	}
+)
+
+func (r *loggingResponseWriter) Write(b []byte) (int, error) {
+	size, err := r.ResponseWriter.Write(b)
+	r.responseData.size += size
+	return size, err
 }
 
-func logMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-
-		lw := &loggingResponseWriter{ResponseWriter: w}
-
-		next.ServeHTTP(lw, r)
-
-		duration := time.Since(start)
-		log.Printf(
-			"[%s] %s %s %d %v",
-			r.Method,
-			r.URL.Path,
-			r.RemoteAddr,
-			lw.statusCode,
-			duration,
-		)
-	})
+func (r *loggingResponseWriter) WriteHeader(statusCode int) {
+	r.ResponseWriter.WriteHeader(statusCode)
+	r.responseData.status = statusCode
 }
 
-func recoverMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if err := recover(); err != nil {
-				log.Printf("PANIC recovered: %v\n", err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+func logMiddleware(logger *zap.SugaredLogger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+
+			responseData := &responseData{
+				status: 0,
+				size:   0,
 			}
-		}()
-		next.ServeHTTP(w, r)
-	})
+
+			lw := loggingResponseWriter{
+				ResponseWriter: w,
+				responseData:   responseData,
+			}
+
+			defer func() {
+				if err := recover(); err != nil {
+					logger.Errorf("PANIC recovered: %v", err)
+					http.Error(&lw, "Internal Server Error", http.StatusInternalServerError)
+				}
+			}()
+			next.ServeHTTP(&lw, r)
+			duration := time.Since(start)
+			logger.Infof("%s %s %d %v %d", r.RequestURI, r.Method, responseData.status, duration, responseData.size)
+		})
+	}
 }
