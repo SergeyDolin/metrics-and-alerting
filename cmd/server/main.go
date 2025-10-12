@@ -1,25 +1,12 @@
 package main
 
 import (
-	"flag"
-	"log"
 	"net/http"
 
 	"github.com/go-chi/chi"
+
+	"go.uber.org/zap"
 )
-
-// переменная flagRunAddr содержит адрес и порт для запуска сервера
-var flagRunAddr string
-
-// parseFlags обрабатывает аргументы командной строки
-// и сохраняет их значения в соответствующих переменных
-func parseFlags() {
-	// регистрируем переменную flagRunAddr
-	// как аргумент -a со значением localhost:8080 по умолчанию
-	flag.StringVar(&flagRunAddr, "a", "localhost:8080", "address and port to run server")
-	// парсим переданные серверу аргументы в зарегистрированные переменные
-	flag.Parse()
-}
 
 // main — точка входа приложения.
 // Инициализирует роутер chi, создаёт хранилище метрик и настраивает маршруты:
@@ -31,11 +18,19 @@ func parseFlags() {
 func main() {
 	parseFlags()
 
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		panic("cannot initialize zap")
+	}
+	defer logger.Sync()
+
+	sugar := logger.Sugar()
+
 	router := chi.NewRouter()
 	ms := createMetricStorage()
 
-	router.Use(recoverMiddleware)
-	router.Use(logMiddleware)
+	// router.Use(recoverMiddleware(sugar))
+	router.Use(logMiddleware(sugar))
 
 	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -54,6 +49,6 @@ func main() {
 			r.Get("/{type}/{name}", getHandler(ms))
 		})
 	})
-	log.Printf("Running server on %s", flagRunAddr)
-	log.Fatal(http.ListenAndServe(flagRunAddr, router))
+	sugar.Infof("Running server on %s", flagRunAddr)
+	sugar.Fatal(http.ListenAndServe(flagRunAddr, router))
 }
