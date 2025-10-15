@@ -66,27 +66,27 @@ func (ms *MetricStorage) getMetrics(m *runtime.MemStats) {
 	ms.gauge["RandomValue"] = rand.Float64()
 }
 
-// func sendMetric(name, typeMetric string, value string, serverAddr string) error {
-// 	// http://<АДРЕС_СЕРВЕРА>/update/<ТИП_МЕТРИКИ>/<ИМЯ_МЕТРИКИ>/<ЗНАЧЕНИЕ_МЕТРИКИ>
-// 	url := fmt.Sprintf("http://%s/update/%s/%s/%s", serverAddr, typeMetric, name, value)
+func sendMetric(name, typeMetric string, value string, serverAddr string) error {
+	// http://<АДРЕС_СЕРВЕРА>/update/<ТИП_МЕТРИКИ>/<ИМЯ_МЕТРИКИ>/<ЗНАЧЕНИЕ_МЕТРИКИ>
+	url := fmt.Sprintf("http://%s/update/%s/%s/%s", serverAddr, typeMetric, name, value)
 
-// 	req, err := http.NewRequest(http.MethodPost, url, nil)
-// 	if err != nil {
-// 		return fmt.Errorf("request error: %v", err)
-// 	}
-// 	req.Header.Set("Content-Type", "text/plain")
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return fmt.Errorf("request error: %v", err)
+	}
+	req.Header.Set("Content-Type", "text/plain")
 
-// 	resp, err := сlient.Do(req)
-// 	if err != nil {
-// 		return fmt.Errorf("response error: %v", err)
-// 	}
-// 	defer resp.Body.Close()
+	resp, err := сlient.Do(req)
+	if err != nil {
+		return fmt.Errorf("response error: %v", err)
+	}
+	defer resp.Body.Close()
 
-// 	if resp.StatusCode != http.StatusOK {
-// 		return fmt.Errorf("server return code %d", resp.StatusCode)
-// 	}
-// 	return nil
-// }
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server return code %d", resp.StatusCode)
+	}
+	return nil
+}
 
 func sendMetricJSON(name, metricType string, serverAddr string, value *float64, delta *int64) error {
 	metric := Metrics{
