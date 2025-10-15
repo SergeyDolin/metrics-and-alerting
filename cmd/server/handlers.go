@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -144,5 +145,93 @@ func postHandler(ms *MetricStorage) http.HandlerFunc {
 		default:
 			http.Error(res, "Unknown metric type", http.StatusBadRequest)
 		}
+	})
+}
+
+func updateJSONHandler(ms *MetricStorage) http.HandlerFunc {
+	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		var msJSON Metrics
+
+		if err := json.NewDecoder(req.Body).Decode(&msJSON); err != nil {
+			http.Error(res, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if msJSON.ID == "" {
+			http.Error(res, "Missing metric ID", http.StatusBadRequest)
+			return
+		}
+
+		switch MetricType(msJSON.MType) {
+		case MetricTypeGauge:
+			if msJSON.Value == nil {
+				http.Error(res, "Missing 'value' for gauge metric", http.StatusBadRequest)
+				return
+			}
+			if msJSON.Delta != nil {
+				http.Error(res, "Unexpected 'delta' for gauge metric", http.StatusBadRequest)
+				return
+			}
+			ms.updateGauge(msJSON.ID, *msJSON.Value)
+		case MetricTypeCounter:
+			if msJSON.Delta == nil {
+				http.Error(res, "Missing 'delta' for counter metric", http.StatusBadRequest)
+				return
+			}
+			if msJSON.Value != nil {
+				http.Error(res, "Unexpected 'value' for counter metric", http.StatusBadRequest)
+				return
+			}
+			ms.updateCounter(msJSON.ID, *msJSON.Delta)
+
+		default:
+			http.Error(res, "Unknown metric type", http.StatusBadRequest)
+		}
+
+		res.Header().Set("Content-Type", "application/json")
+		res.WriteHeader(http.StatusOK)
+	})
+}
+
+func valueJSONHandler(ms *MetricStorage) http.HandlerFunc {
+	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		var msJSON Metrics
+
+		if err := json.NewDecoder(req.Body).Decode(&msJSON); err != nil {
+			http.Error(res, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if msJSON.ID == "" {
+			http.Error(res, "Missing metric ID", http.StatusBadRequest)
+			return
+		}
+		if MetricType(msJSON.MType) == "" {
+			http.Error(res, "Missing metric type", http.StatusBadRequest)
+			return
+		}
+
+		switch MetricType(msJSON.MType) {
+		case MetricTypeGauge:
+			resp, err := json.Marshal(ms.gauge[msJSON.ID])
+			if err != nil {
+				http.Error(res, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			res.Write(resp)
+		case MetricTypeCounter:
+			resp, err := json.Marshal(ms.counter[msJSON.ID])
+			if err != nil {
+				http.Error(res, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			res.Write(resp)
+		default:
+			http.Error(res, "Unknown metric type", http.StatusBadRequest)
+		}
+
+		res.Header().Set("Content-Type", "application/json")
+		res.WriteHeader(http.StatusOK)
+
 	})
 }

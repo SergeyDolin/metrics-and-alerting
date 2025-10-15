@@ -1,5 +1,12 @@
 package main
 
+type Metrics struct {
+	ID    string   `json:"id"`              // имя метрики
+	MType string   `json:"type"`            // параметр, принимающий значение gauge или counter
+	Delta *int64   `json:"delta,omitempty"` // значение метрики в случае передачи counter
+	Value *float64 `json:"value,omitempty"` // значение метрики в случае передачи gauge
+}
+
 // updateGauge — обновляет или устанавливает значение метрики типа gauge по имени.
 // Перезаписывает текущее значение, если оно существует.
 func (ms *MetricStorage) updateGauge(name string, value float64) {
