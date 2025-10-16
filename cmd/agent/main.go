@@ -142,7 +142,7 @@ func main() {
 		if time.Since(lastReport) >= reportInterval {
 			sent := 0
 			for name, value := range ms.gauge {
-				err := sendMetric(name, "gauge", fmt.Sprintf("%f", value), serverAddr)
+				// err := sendMetric(name, "gauge", fmt.Sprintf("%f", value), serverAddr)
 				err := sendMetricJSON(name, "gauge", serverAddr, &value, nil)
 				if err != nil {
 					fmt.Printf("error send gauge %v", err)
@@ -151,7 +151,7 @@ func main() {
 				}
 			}
 			for name, delta := range ms.counter {
-				err := sendMetric(name, "counter", fmt.Sprintf("%d", value), serverAddr)
+				// err := sendMetric(name, "counter", fmt.Sprintf("%d", value), serverAddr)
 				err := sendMetricJSON(name, "counter", serverAddr, nil, &delta)
 				if err != nil {
 					fmt.Printf("error send counter %v", err)
