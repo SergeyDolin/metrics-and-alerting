@@ -1,7 +1,8 @@
 package main
 
 import (
-	"flag"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -11,12 +12,12 @@ import (
 
 var сlient = &http.Client{}
 
-// -a=localhost:8080 -r=10 (reportInterval) -p=2 (pollInterval)
-var (
-	sAddr     = flag.String("a", "localhost:8080", "address and port to run server")
-	pInterval = flag.Int("r", 10, "reportInterval set")
-	rInterval = flag.Int("p", 2, "pollInterval set")
-)
+type Metrics struct {
+	ID    string   `json:"id"`
+	MType string   `json:"type"`
+	Delta *int64   `json:"delta,omitempty"`
+	Value *float64 `json:"value,omitempty"`
+}
 
 type MetricStorage struct {
 	gauge   map[string]float64
@@ -55,6 +56,9 @@ var fieldMap = map[string]func(*runtime.MemStats) float64{
 	"StackInuse":    func(m *runtime.MemStats) float64 { return float64(m.StackInuse) },
 	"Sys":           func(m *runtime.MemStats) float64 { return float64(m.Sys) },
 	"TotalAlloc":    func(m *runtime.MemStats) float64 { return float64(m.TotalAlloc) },
+	"HeapInuse":     func(m *runtime.MemStats) float64 { return float64(m.HeapInuse) },
+	"MSpanInuse":    func(m *runtime.MemStats) float64 { return float64(m.MSpanInuse) },
+	"StackSys":      func(m *runtime.MemStats) float64 { return float64(m.StackSys) },
 }
 
 func (ms *MetricStorage) getMetrics(m *runtime.MemStats) {
@@ -87,8 +91,41 @@ func sendMetric(name, typeMetric string, value string, serverAddr string) error 
 	return nil
 }
 
+func sendMetricJSON(name, metricType string, serverAddr string, value *float64, delta *int64) error {
+	metric := Metrics{
+		ID:    name,
+		MType: metricType,
+		Value: value,
+		Delta: delta,
+	}
+
+	body, err := json.Marshal(metric)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metric: %w", err)
+	}
+
+	url := fmt.Sprintf("http://%s/update", serverAddr)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := сlient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func main() {
-	flag.Parse()
+	parseArgs()
 	ms := createMetricStorage()
 
 	serverAddr := *sAddr
@@ -108,15 +145,17 @@ func main() {
 		if time.Since(lastReport) >= reportInterval {
 			sent := 0
 			for name, value := range ms.gauge {
-				err := sendMetric(name, "gauge", fmt.Sprintf("%f", value), serverAddr)
+				// err := sendMetric(name, "gauge", fmt.Sprintf("%f", value), serverAddr)
+				err := sendMetricJSON(name, "gauge", serverAddr, &value, nil)
 				if err != nil {
 					fmt.Printf("error send gauge %v", err)
 				} else {
 					sent++
 				}
 			}
-			for name, value := range ms.counter {
-				err := sendMetric(name, "counter", fmt.Sprintf("%d", value), serverAddr)
+			for name, delta := range ms.counter {
+				// err := sendMetric(name, "counter", fmt.Sprintf("%d", value), serverAddr)
+				err := sendMetricJSON(name, "counter", serverAddr, nil, &delta)
 				if err != nil {
 					fmt.Printf("error send counter %v", err)
 				} else {

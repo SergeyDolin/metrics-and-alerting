@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -110,6 +112,76 @@ func Test_sendMetric(t *testing.T) {
 
 			if tt.metric.serverAddr == "localhost:12345" && err != nil {
 				assert.Contains(t, err.Error(), "connection refused")
+			}
+		})
+	}
+}
+
+func Test_sendMetricJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "/update", r.URL.Path) // ← теперь должно быть /update
+
+		var received Metrics
+		err := json.NewDecoder(r.Body).Decode(&received)
+		assert.NoError(t, err)
+
+		if r.URL.Query().Get("fail") == "true" {
+			w.WriteHeader(http.StatusInternalServerError)
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(received)
+		}
+	}))
+	defer server.Close()
+
+	// Извлекаем хост:порт из server.URL
+	serverAddr := strings.TrimPrefix(server.URL, "http://")
+
+	tests := []struct {
+		name        string
+		metricName  string
+		metricType  string
+		value       *float64
+		delta       *int64
+		queryFail   bool
+		expectError bool
+	}{
+		{
+			name:        "Valid gauge metric",
+			metricName:  "Temperature",
+			metricType:  "gauge",
+			value:       func() *float64 { v := 25.5; return &v }(),
+			delta:       nil,
+			queryFail:   false,
+			expectError: false,
+		},
+		{
+			name:        "Invalid server address",
+			metricName:  "Alloc",
+			metricType:  "gauge",
+			value:       func() *float64 { v := 12345.0; return &v }(),
+			delta:       nil,
+			queryFail:   false,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testServerAddr := serverAddr
+			if tt.name == "Invalid server address" {
+				testServerAddr = "localhost:12345"
+			}
+
+			err := sendMetricJSON(tt.metricName, tt.metricType, testServerAddr, tt.value, tt.delta)
+
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
 			}
 		})
 	}
