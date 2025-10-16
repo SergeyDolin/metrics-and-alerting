@@ -6,6 +6,8 @@ import (
 	"github.com/go-chi/chi"
 
 	"go.uber.org/zap"
+
+	"github.com/go-chi/chi/middleware"
 )
 
 // main — точка входа приложения.
@@ -40,12 +42,12 @@ func main() {
 		http.Error(w, "Invalid path format", http.StatusNotFound)
 	})
 
+	router.Use(middleware.StripSlashes)
 	router.Get("/", indexHandler(ms))
 	router.Post("/update", updateJSONHandler(ms))
 	router.Post("/value", valueJSONHandler(ms))
 	router.Post("/update/{type}/{name}/{value}", postHandler(ms))
 	router.Get("/value/{type}/{name}", getHandler(ms))
-
 	sugar.Infof("Running server on %s", flagRunAddr)
 	sugar.Fatal(http.ListenAndServe(flagRunAddr, router))
 }
