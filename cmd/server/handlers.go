@@ -195,45 +195,57 @@ func updateJSONHandler(ms *MetricStorage) http.HandlerFunc {
 }
 
 func valueJSONHandler(ms *MetricStorage) http.HandlerFunc {
-	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
-		var msJSON Metrics
+	return func(res http.ResponseWriter, req *http.Request) {
+		var reqMetric Metrics
 
 		res.Header().Set("Content-Type", "application/json")
 
-		if err := json.NewDecoder(req.Body).Decode(&msJSON); err != nil {
+		if err := json.NewDecoder(req.Body).Decode(&reqMetric); err != nil {
 			http.Error(res, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		if msJSON.ID == "" {
+		if reqMetric.ID == "" {
 			http.Error(res, "Missing metric ID", http.StatusBadRequest)
 			return
 		}
-		if MetricType(msJSON.MType) == "" {
+		if reqMetric.MType == "" {
 			http.Error(res, "Missing metric type", http.StatusBadRequest)
 			return
 		}
 
-		switch MetricType(msJSON.MType) {
+		switch MetricType(reqMetric.MType) {
 		case MetricTypeGauge:
-			resp, err := json.Marshal(ms.gauge[msJSON.ID])
-			if err != nil {
-				http.Error(res, err.Error(), http.StatusInternalServerError)
+			if value, ok := ms.gauge[reqMetric.ID]; ok {
+				respMetric := Metrics{
+					ID:    reqMetric.ID,
+					MType: "gauge",
+					Value: &value,
+				}
+				if err := json.NewEncoder(res).Encode(respMetric); err != nil {
+					http.Error(res, "Failed to encode response", http.StatusInternalServerError)
+				}
 				return
 			}
-			res.Write(resp)
+
 		case MetricTypeCounter:
-			resp, err := json.Marshal(ms.counter[msJSON.ID])
-			if err != nil {
-				http.Error(res, err.Error(), http.StatusInternalServerError)
+			if delta, ok := ms.counter[reqMetric.ID]; ok {
+				respMetric := Metrics{
+					ID:    reqMetric.ID,
+					MType: "counter",
+					Delta: &delta,
+				}
+				if err := json.NewEncoder(res).Encode(respMetric); err != nil {
+					http.Error(res, "Failed to encode response", http.StatusInternalServerError)
+				}
 				return
 			}
-			res.Write(resp)
+
 		default:
 			http.Error(res, "Unknown metric type", http.StatusBadRequest)
+			return
 		}
 
-		res.WriteHeader(http.StatusOK)
-
-	})
+		http.Error(res, "Metric not found", http.StatusNotFound)
+	}
 }
