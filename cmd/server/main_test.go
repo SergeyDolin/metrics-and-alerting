@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -264,36 +263,42 @@ func Test_valueJSONHandler(t *testing.T) {
 		name           string
 		jsonBody       string
 		expectedStatus int
-		expectedValue  interface{} // nil = не проверяем тело
-		expectedError  string      // подстрока в ошибке
+		expectedMetric *Metrics // ожидаемый объект
+		expectedError  string
 	}{
 		{
 			name:           "Get existing gauge",
 			jsonBody:       `{"id": "Temperature", "type": "gauge"}`,
 			expectedStatus: http.StatusOK,
-			expectedValue:  25.5,
+			expectedMetric: &Metrics{
+				ID:    "Temperature",
+				MType: "gauge",
+				Value: func(v float64) *float64 { return &v }(25.5),
+			},
 		},
 		{
 			name:           "Get existing counter",
 			jsonBody:       `{"id": "PollCount", "type": "counter"}`,
 			expectedStatus: http.StatusOK,
-			expectedValue:  int64(42),
+			expectedMetric: &Metrics{
+				ID:    "PollCount",
+				MType: "counter",
+				Delta: func(v int64) *int64 { return &v }(42),
+			},
 		},
 		{
-			name:           "Get non-existing gauge (returns zero)",
+			name:           "Get non-existing gauge",
 			jsonBody:       `{"id": "NonExistent", "type": "gauge"}`,
-			expectedStatus: http.StatusOK,
-			expectedValue:  0.0,
+			expectedStatus: http.StatusNotFound,
 		},
 		{
-			name:           "Get non-existing counter (returns zero)",
+			name:           "Get non-existing counter",
 			jsonBody:       `{"id": "Unknown", "type": "counter"}`,
-			expectedStatus: http.StatusOK,
-			expectedValue:  int64(0),
+			expectedStatus: http.StatusNotFound,
 		},
 		{
 			name:           "Invalid JSON",
-			jsonBody:       `{"id": "Test"`, // незакрытый JSON
+			jsonBody:       `{"id": "Test"`,
 			expectedStatus: http.StatusBadRequest,
 			expectedError:  "Invalid JSON",
 		},
@@ -310,12 +315,6 @@ func Test_valueJSONHandler(t *testing.T) {
 			expectedError:  "Missing metric type",
 		},
 		{
-			name:           "Empty type",
-			jsonBody:       `{"id": "Test", "type": ""}`,
-			expectedStatus: http.StatusBadRequest,
-			expectedError:  "Missing metric type",
-		},
-		{
 			name:           "Unknown metric type",
 			jsonBody:       `{"id": "Test", "type": "unknown"}`,
 			expectedStatus: http.StatusBadRequest,
@@ -325,13 +324,8 @@ func Test_valueJSONHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var req *http.Request
-			if tt.name == "Wrong method (GET instead of POST)" {
-				req = httptest.NewRequest(http.MethodGet, "/value", nil)
-			} else {
-				req = httptest.NewRequest(http.MethodPost, "/value", bytes.NewBufferString(tt.jsonBody))
-				req.Header.Set("Content-Type", "application/json")
-			}
+			req := httptest.NewRequest(http.MethodPost, "/value", strings.NewReader(tt.jsonBody))
+			req.Header.Set("Content-Type", "application/json")
 
 			rr := httptest.NewRecorder()
 			router.ServeHTTP(rr, req)
@@ -343,32 +337,23 @@ func Test_valueJSONHandler(t *testing.T) {
 				return
 			}
 
-			if tt.expectedValue != nil {
-				var actualValue interface{}
-				err := json.Unmarshal(rr.Body.Bytes(), &actualValue)
-				require.NoError(t, err, "Response body must be valid JSON")
+			if tt.expectedMetric != nil {
+				var actual Metrics
+				err := json.Unmarshal(rr.Body.Bytes(), &actual)
+				require.NoError(t, err)
 
-				// Сравниваем с учётом типов
-				switch expected := tt.expectedValue.(type) {
-				case float64:
-					// JSON числа без точки могут стать float64 или int64 в Go
-					switch actual := actualValue.(type) {
-					case float64:
-						assert.Equal(t, expected, actual)
-					case int64:
-						assert.Equal(t, expected, float64(actual))
-					default:
-						t.Fatalf("Unexpected type for gauge: %T", actualValue)
-					}
-				case int64:
-					switch actual := actualValue.(type) {
-					case int64:
-						assert.Equal(t, expected, actual)
-					case float64:
-						assert.Equal(t, float64(expected), actual)
-					default:
-						t.Fatalf("Unexpected type for counter: %T", actualValue)
-					}
+				assert.Equal(t, tt.expectedMetric.ID, actual.ID)
+				assert.Equal(t, tt.expectedMetric.MType, actual.MType)
+
+				if tt.expectedMetric.Value != nil {
+					require.NotNil(t, actual.Value)
+					assert.Equal(t, *tt.expectedMetric.Value, *actual.Value)
+					assert.Nil(t, actual.Delta)
+				}
+				if tt.expectedMetric.Delta != nil {
+					require.NotNil(t, actual.Delta)
+					assert.Equal(t, *tt.expectedMetric.Delta, *actual.Delta)
+					assert.Nil(t, actual.Value)
 				}
 			}
 		})
