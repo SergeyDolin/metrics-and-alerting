@@ -40,16 +40,12 @@ func main() {
 		http.Error(w, "Invalid path format", http.StatusNotFound)
 	})
 
-	router.Route("/", func(r chi.Router) {
-		r.Get("/", indexHandler(ms))
+	router.Get("/", indexHandler(ms))
+	router.Post("/update", updateJSONHandler(ms))
+	router.Post("/value", valueJSONHandler(ms))
+	router.Post("/update/{type}/{name}/{value}", postHandler(ms))
+	router.Get("/value/{type}/{name}", getHandler(ms))
 
-		r.Post("/update", updateJSONHandler(ms))
-		r.Post("/value", valueJSONHandler(ms))
-
-		r.Post("/update/{type}/{name}/{value}", postHandler(ms))
-		r.Get("/value/{type}/{name}", getHandler(ms))
-
-	})
 	sugar.Infof("Running server on %s", flagRunAddr)
 	sugar.Fatal(http.ListenAndServe(flagRunAddr, router))
 }
