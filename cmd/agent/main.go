@@ -123,32 +123,44 @@ func sendMetricJSON(name, metricType string, serverAddr string, value *float64, 
 
 func main() {
 	parseArgs()
+	ms := createMetricStorage()
+
 	serverAddr := *sAddr
 
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
 	pollInterval := time.Duration(*pInterval) * time.Second
 	reportInterval := time.Duration(*rInterval) * time.Second
 	lastReport := time.Now()
 
+	ms.getMetrics(&m)
 	for {
 		time.Sleep(pollInterval)
+		runtime.ReadMemStats(&m)
+		ms.getMetrics(&m)
 
 		if time.Since(lastReport) >= reportInterval {
-			var m runtime.MemStats
-			runtime.ReadMemStats(&m)
-
-			for name, fn := range fieldMap {
-				value := fn(&m)
-				if err := sendMetricJSON(name, "gauge", serverAddr, &value, nil); err != nil {
-					fmt.Printf("Error sending gauge %s: %v\n", name, err)
+			sent := 0
+			for name, value := range ms.gauge {
+				err := sendMetric(name, "gauge", fmt.Sprintf("%f", value), serverAddr)
+				err := sendMetricJSON(name, "gauge", serverAddr, &value, nil)
+				if err != nil {
+					fmt.Printf("error send gauge %v", err)
+				} else {
+					sent++
 				}
 			}
-
-			pollCountDelta := int64(1)
-			if err := sendMetricJSON("PollCount", "counter", serverAddr, nil, &pollCountDelta); err != nil {
-				fmt.Printf("Error sending PollCount: %v\n", err)
+			for name, delta := range ms.counter {
+				err := sendMetric(name, "counter", fmt.Sprintf("%d", value), serverAddr)
+				err := sendMetricJSON(name, "counter", serverAddr, nil, &delta)
+				if err != nil {
+					fmt.Printf("error send counter %v", err)
+				} else {
+					sent++
+				}
 			}
-
 			lastReport = time.Now()
 		}
 	}
+
 }

@@ -47,7 +47,7 @@ func main() {
 		r.Post("/value", valueJSONHandler(ms))
 
 		r.Post("/update/{type}/{name}/{value}", postHandler(ms))
-		r.Get("/{type}/{name}", getHandler(ms))
+		r.Get("/value/{type}/{name}", getHandler(ms))
 
 	})
 	sugar.Infof("Running server on %s", flagRunAddr)
