@@ -48,6 +48,7 @@ func main() {
 	router.Post("/value", valueJSONHandler(ms))
 	router.Post("/update/{type}/{name}/{value}", postHandler(ms))
 	router.Get("/value/{type}/{name}", getHandler(ms))
+
 	sugar.Infof("Running server on %s", flagRunAddr)
 	sugar.Fatal(http.ListenAndServe(flagRunAddr, router))
 }

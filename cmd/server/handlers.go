@@ -152,6 +152,8 @@ func updateJSONHandler(ms *MetricStorage) http.HandlerFunc {
 	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
 		var msJSON Metrics
 
+		res.Header().Set("Content-Type", "application/json")
+
 		if err := json.NewDecoder(req.Body).Decode(&msJSON); err != nil {
 			http.Error(res, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
@@ -188,7 +190,6 @@ func updateJSONHandler(ms *MetricStorage) http.HandlerFunc {
 			http.Error(res, "Unknown metric type", http.StatusBadRequest)
 		}
 
-		res.Header().Set("Content-Type", "application/json")
 		res.WriteHeader(http.StatusOK)
 	})
 }
@@ -196,6 +197,8 @@ func updateJSONHandler(ms *MetricStorage) http.HandlerFunc {
 func valueJSONHandler(ms *MetricStorage) http.HandlerFunc {
 	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
 		var msJSON Metrics
+
+		res.Header().Set("Content-Type", "application/json")
 
 		if err := json.NewDecoder(req.Body).Decode(&msJSON); err != nil {
 			http.Error(res, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -230,7 +233,6 @@ func valueJSONHandler(ms *MetricStorage) http.HandlerFunc {
 			http.Error(res, "Unknown metric type", http.StatusBadRequest)
 		}
 
-		res.Header().Set("Content-Type", "application/json")
 		res.WriteHeader(http.StatusOK)
 
 	})
