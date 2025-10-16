@@ -149,10 +149,8 @@ func postHandler(ms *MetricStorage) http.HandlerFunc {
 }
 
 func updateJSONHandler(ms *MetricStorage) http.HandlerFunc {
-	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+	return func(res http.ResponseWriter, req *http.Request) {
 		var msJSON Metrics
-
-		res.Header().Set("Content-Type", "application/json")
 
 		if err := json.NewDecoder(req.Body).Decode(&msJSON); err != nil {
 			http.Error(res, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -175,6 +173,7 @@ func updateJSONHandler(ms *MetricStorage) http.HandlerFunc {
 				return
 			}
 			ms.updateGauge(msJSON.ID, *msJSON.Value)
+
 		case MetricTypeCounter:
 			if msJSON.Delta == nil {
 				http.Error(res, "Missing 'delta' for counter metric", http.StatusBadRequest)
@@ -188,10 +187,15 @@ func updateJSONHandler(ms *MetricStorage) http.HandlerFunc {
 
 		default:
 			http.Error(res, "Unknown metric type", http.StatusBadRequest)
+			return
 		}
 
-		res.WriteHeader(http.StatusOK)
-	})
+		res.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(res).Encode(msJSON); err != nil {
+			http.Error(res, "Bad encode", http.StatusBadRequest)
+			return
+		}
+	}
 }
 
 func valueJSONHandler(ms *MetricStorage) http.HandlerFunc {
