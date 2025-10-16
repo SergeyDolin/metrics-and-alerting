@@ -56,6 +56,9 @@ var fieldMap = map[string]func(*runtime.MemStats) float64{
 	"StackInuse":    func(m *runtime.MemStats) float64 { return float64(m.StackInuse) },
 	"Sys":           func(m *runtime.MemStats) float64 { return float64(m.Sys) },
 	"TotalAlloc":    func(m *runtime.MemStats) float64 { return float64(m.TotalAlloc) },
+	"HeapInuse":     func(m *runtime.MemStats) float64 { return float64(m.HeapInuse) },
+	"MSpanInuse":    func(m *runtime.MemStats) float64 { return float64(m.MSpanInuse) },
+	"StackSys":      func(m *runtime.MemStats) float64 { return float64(m.StackSys) },
 }
 
 func (ms *MetricStorage) getMetrics(m *runtime.MemStats) {
