@@ -75,9 +75,18 @@ func logMiddleware(logger *zap.SugaredLogger) func(http.Handler) http.Handler {
 	}
 }
 
+func isCompressible(contentType string) bool {
+	if contentType == "" {
+		return false
+	}
+	parts := strings.SplitN(strings.ToLower(contentType), ";", 2)
+	mimeType := strings.TrimSpace(parts[0])
+	return mimeType == "text/html" || mimeType == "application/json"
+}
+
 func gzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Распаковка тела запроса
+		// Распаковка входящего тела, если Content-Encoding: gzip
 		if r.Header.Get("Content-Encoding") == "gzip" {
 			gz, err := gzip.NewReader(r.Body)
 			if err != nil {
@@ -86,17 +95,63 @@ func gzipMiddleware(next http.Handler) http.Handler {
 			}
 			defer gz.Close()
 			r.Body = gz
+			r.Header.Del("Content-Length") // важно при замене тела
 		}
 
-		// Оборачиваем ResponseWriter для сжатия ответа
-		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-			gz := gzip.NewWriter(w)
-			defer gz.Close()
-			w.Header().Set("Content-Encoding", "gzip")
-			gzipWrapper := &gzipResponseWriter{Writer: gz, ResponseWriter: w}
-			next.ServeHTTP(gzipWrapper, r)
-		} else {
+		// Если клиент не поддерживает gzip — пропускаем
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Оборачиваем в специальный writer, который примет решение о сжатии
+		// после того, как обработчик установит Content-Type
+		gzipWrapper := &conditionalGzipResponseWriter{
+			ResponseWriter: w,
+			supportsGzip:   true,
+		}
+
+		next.ServeHTTP(gzipWrapper, r)
+
+		// Закрываем gzip.Writer, если он был создан
+		if gzipWrapper.gz != nil {
+			gzipWrapper.gz.Close()
 		}
 	})
+}
+
+type conditionalGzipResponseWriter struct {
+	http.ResponseWriter
+	gz           *gzip.Writer
+	supportsGzip bool
+	wroteHeader  bool
+}
+
+func (w *conditionalGzipResponseWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if w.gz != nil {
+		return w.gz.Write(b)
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *conditionalGzipResponseWriter) WriteHeader(statusCode int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+
+	contentType := w.Header().Get("Content-Type")
+	if w.supportsGzip && isCompressible(contentType) {
+
+		w.gz = gzip.NewWriter(w.ResponseWriter)
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Vary", "Accept-Encoding")
+		w.ResponseWriter.WriteHeader(statusCode)
+	} else {
+
+		w.ResponseWriter.WriteHeader(statusCode)
+	}
 }
