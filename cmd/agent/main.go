@@ -117,7 +117,8 @@ func sendMetricJSON(name, metricType string, serverAddr string, value *float64, 
 	}
 
 	url := fmt.Sprintf("http://%s/update", serverAddr)
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(body))
+	// req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(body))
+	req, err := http.NewRequest(http.MethodPost, url, &b)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -176,5 +177,4 @@ func main() {
 			lastReport = time.Now()
 		}
 	}
-
 }
