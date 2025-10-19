@@ -27,14 +27,29 @@ func indexHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 			http.Error(res, "Only GET request allowed!", http.StatusMethodNotAllowed)
 			return
 		}
-		list := make([]string, 0)
+
+		// Устанавливаем Content-Type в text/html — ОБЯЗАТЕЛЬНО!
+		res.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+		// Формируем простую HTML-страницу
+		html := `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Metrics</title>
+</head>
+<body>
+    <h1>Metrics</h1>
+    <ul>`
 		for name, value := range ms.gauge {
-			list = append(list, fmt.Sprintf("%s=%v", name, value))
+			html += fmt.Sprintf("<li><strong>%s</strong>: %v (gauge)</li>", name, value)
 		}
 		for name, value := range ms.counter {
-			list = append(list, fmt.Sprintf("%s=%v", name, value))
+			html += fmt.Sprintf("<li><strong>%s</strong>: %v (counter)</li>", name, value)
 		}
-		io.WriteString(res, strings.Join(list, ", "))
+		html += `</ul></body></html>`
+
+		io.WriteString(res, html)
 	}
 }
 
