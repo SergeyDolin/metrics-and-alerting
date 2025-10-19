@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -92,6 +93,8 @@ func sendMetric(name, typeMetric string, value string, serverAddr string) error 
 }
 
 func sendMetricJSON(name, metricType string, serverAddr string, value *float64, delta *int64) error {
+	var b bytes.Buffer
+
 	metric := Metrics{
 		ID:    name,
 		MType: metricType,
@@ -104,6 +107,15 @@ func sendMetricJSON(name, metricType string, serverAddr string, value *float64, 
 		return fmt.Errorf("failed to marshal metric: %w", err)
 	}
 
+	gz := gzip.NewWriter(&b)
+	if _, err := gz.Write(body); err != nil {
+		gz.Close()
+		return fmt.Errorf("failed to compress body: %w", err)
+	}
+	if err := gz.Close(); err != nil {
+		return fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
 	url := fmt.Sprintf("http://%s/update", serverAddr)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(body))
 	if err != nil {
@@ -111,6 +123,7 @@ func sendMetricJSON(name, metricType string, serverAddr string, value *float64, 
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
 
 	resp, err := сlient.Do(req)
 	if err != nil {
@@ -145,7 +158,6 @@ func main() {
 		if time.Since(lastReport) >= reportInterval {
 			sent := 0
 			for name, value := range ms.gauge {
-				// err := sendMetric(name, "gauge", fmt.Sprintf("%f", value), serverAddr)
 				err := sendMetricJSON(name, "gauge", serverAddr, &value, nil)
 				if err != nil {
 					fmt.Printf("error send gauge %v", err)
@@ -154,7 +166,6 @@ func main() {
 				}
 			}
 			for name, delta := range ms.counter {
-				// err := sendMetric(name, "counter", fmt.Sprintf("%d", value), serverAddr)
 				err := sendMetricJSON(name, "counter", serverAddr, nil, &delta)
 				if err != nil {
 					fmt.Printf("error send counter %v", err)

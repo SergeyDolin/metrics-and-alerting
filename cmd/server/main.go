@@ -32,6 +32,8 @@ func main() {
 	ms := createMetricStorage()
 
 	// router.Use(recoverMiddleware(sugar))
+	router.Use(middleware.StripSlashes)
+	router.Use(gzipMiddleware)
 	router.Use(logMiddleware(sugar))
 
 	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +44,6 @@ func main() {
 		http.Error(w, "Invalid path format", http.StatusNotFound)
 	})
 
-	router.Use(middleware.StripSlashes)
 	router.Get("/", indexHandler(ms))
 	router.Post("/update", updateJSONHandler(ms))
 	router.Post("/value", valueJSONHandler(ms))

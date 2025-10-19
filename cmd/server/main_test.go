@@ -251,7 +251,6 @@ func Test_updateJSONHandler(t *testing.T) {
 }
 
 func Test_valueJSONHandler(t *testing.T) {
-	// Подготовим хранилище с данными
 	ms := createMetricStorage()
 	ms.updateGauge("Temperature", 25.5)
 	ms.updateCounter("PollCount", 42)
