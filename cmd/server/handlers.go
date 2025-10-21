@@ -28,10 +28,8 @@ func indexHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 			return
 		}
 
-		// Устанавливаем Content-Type в text/html — ОБЯЗАТЕЛЬНО!
 		res.Header().Set("Content-Type", "text/html; charset=utf-8")
 
-		// Формируем простую HTML-страницу
 		html := `<!DOCTYPE html>
 <html lang="en">
 <head>
