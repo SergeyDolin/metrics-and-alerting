@@ -27,6 +27,8 @@ func indexHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 			http.Error(res, "Only GET request allowed!", http.StatusMethodNotAllowed)
 			return
 		}
+		ms.mu.Lock()
+		defer ms.mu.Unlock()
 
 		res.Header().Set("Content-Type", "text/html; charset=utf-8")
 
@@ -64,6 +66,9 @@ func getHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 
 		metricType := strings.ToLower(chi.URLParam(req, "type"))
 		metricName := chi.URLParam(req, "name")
+
+		ms.mu.Lock()
+		defer ms.mu.Unlock()
 
 		switch metricType {
 		case "gauge":

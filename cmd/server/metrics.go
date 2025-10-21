@@ -16,6 +16,8 @@ type Metrics struct {
 // updateGauge — обновляет или устанавливает значение метрики типа gauge по имени.
 // Перезаписывает текущее значение, если оно существует.
 func (ms *MetricStorage) updateGauge(name string, value float64) {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
 	ms.gauge[name] = value
 }
 
@@ -23,6 +25,8 @@ func (ms *MetricStorage) updateGauge(name string, value float64) {
 // Если метрика ещё не существует — инициализирует её нулём, затем прибавляет переданное значение.
 // Counter предназначен для накопления, а не перезаписи.
 func (ms *MetricStorage) updateCounter(name string, value int64) {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
 	if _, ok := ms.counter[name]; !ok {
 		ms.counter[name] = 0
 	}
@@ -30,6 +34,8 @@ func (ms *MetricStorage) updateCounter(name string, value int64) {
 }
 
 func (ms *MetricStorage) SaveToFile(filePath string) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
 	var metrics []Metrics
 
 	for name, value := range ms.gauge {
@@ -77,6 +83,9 @@ func (ms *MetricStorage) LoadFromFile(filePath string) error {
 	if err := json.Unmarshal(data, &metrics); err != nil {
 		return err
 	}
+
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
 
 	for _, m := range metrics {
 		switch m.MType {
