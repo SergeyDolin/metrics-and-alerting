@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi"
 
@@ -30,6 +31,26 @@ func main() {
 
 	router := chi.NewRouter()
 	ms := createMetricStorage()
+
+	// Загрузка при старте
+	if flagRestore && flagFileStoragePath != "" {
+		if err := ms.LoadFromFile(flagFileStoragePath); err != nil {
+			sugar.Warnf("Failed to restore metrics: %v", err)
+		}
+	}
+
+	// Фоновое сохранение
+	if flagStoreInterval > 0 && flagFileStoragePath != "" {
+		go func() {
+			ticker := time.NewTicker(flagStoreInterval)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := ms.SaveToFile(flagFileStoragePath); err != nil {
+					sugar.Errorf("Failed to save metrics: %v", err)
+				}
+			}
+		}()
+	}
 
 	// router.Use(recoverMiddleware(sugar))
 	router.Use(middleware.StripSlashes)
