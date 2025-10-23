@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi"
+
+	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
 )
 
 type MetricType string
@@ -135,7 +137,7 @@ func metricHandler(ms *MetricStorage, metricType MetricType, parser func(string)
 	}
 }
 
-func postHandler(ms *MetricStorage) http.HandlerFunc {
+func postHandler(ms *MetricStorage, saveFunc func()) http.HandlerFunc {
 	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
 		typeOfMetric := strings.ToLower(chi.URLParam(req, "type"))
 
@@ -147,6 +149,7 @@ func postHandler(ms *MetricStorage) http.HandlerFunc {
 				},
 				func(name string, i interface{}) {
 					ms.updateGauge(name, i.(float64))
+					saveFunc()
 				},
 			)(res, req)
 
@@ -157,6 +160,7 @@ func postHandler(ms *MetricStorage) http.HandlerFunc {
 				},
 				func(name string, i interface{}) {
 					ms.updateCounter(name, i.(int64))
+					saveFunc()
 				},
 			)(res, req)
 
@@ -166,9 +170,9 @@ func postHandler(ms *MetricStorage) http.HandlerFunc {
 	})
 }
 
-func updateJSONHandler(ms *MetricStorage) http.HandlerFunc {
+func updateJSONHandler(ms *MetricStorage, saveFunc func()) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
-		var msJSON Metrics
+		var msJSON metrics.Metrics
 
 		if err := json.NewDecoder(req.Body).Decode(&msJSON); err != nil {
 			http.Error(res, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -191,6 +195,7 @@ func updateJSONHandler(ms *MetricStorage) http.HandlerFunc {
 				return
 			}
 			ms.updateGauge(msJSON.ID, *msJSON.Value)
+			saveFunc()
 
 		case MetricTypeCounter:
 			if msJSON.Delta == nil {
@@ -202,6 +207,7 @@ func updateJSONHandler(ms *MetricStorage) http.HandlerFunc {
 				return
 			}
 			ms.updateCounter(msJSON.ID, *msJSON.Delta)
+			saveFunc()
 
 		default:
 			http.Error(res, "Unknown metric type", http.StatusBadRequest)
@@ -218,7 +224,7 @@ func updateJSONHandler(ms *MetricStorage) http.HandlerFunc {
 
 func valueJSONHandler(ms *MetricStorage) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
-		var reqMetric Metrics
+		var reqMetric metrics.Metrics
 
 		res.Header().Set("Content-Type", "application/json")
 
@@ -239,7 +245,7 @@ func valueJSONHandler(ms *MetricStorage) http.HandlerFunc {
 		switch MetricType(reqMetric.MType) {
 		case MetricTypeGauge:
 			if value, ok := ms.gauge[reqMetric.ID]; ok {
-				respMetric := Metrics{
+				respMetric := metrics.Metrics{
 					ID:    reqMetric.ID,
 					MType: "gauge",
 					Value: &value,
@@ -252,7 +258,7 @@ func valueJSONHandler(ms *MetricStorage) http.HandlerFunc {
 
 		case MetricTypeCounter:
 			if delta, ok := ms.counter[reqMetric.ID]; ok {
-				respMetric := Metrics{
+				respMetric := metrics.Metrics{
 					ID:    reqMetric.ID,
 					MType: "counter",
 					Delta: &delta,

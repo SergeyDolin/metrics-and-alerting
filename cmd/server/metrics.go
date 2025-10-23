@@ -4,14 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"syscall"
-)
 
-type Metrics struct {
-	ID    string   `json:"id"`              // имя метрики
-	MType string   `json:"type"`            // параметр, принимающий значение gauge или counter
-	Delta *int64   `json:"delta,omitempty"` // значение метрики в случае передачи counter
-	Value *float64 `json:"value,omitempty"` // значение метрики в случае передачи gauge
-}
+	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
+)
 
 // updateGauge — обновляет или устанавливает значение метрики типа gauge по имени.
 // Перезаписывает текущее значение, если оно существует.
@@ -36,11 +31,11 @@ func (ms *MetricStorage) updateCounter(name string, value int64) {
 func (ms *MetricStorage) SaveToFile(filePath string) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	var metrics []Metrics
+	var allMetrics []metrics.Metrics
 
 	for name, value := range ms.gauge {
 		v := value
-		metrics = append(metrics, Metrics{
+		allMetrics = append(allMetrics, metrics.Metrics{
 			ID:    name,
 			MType: "gauge",
 			Value: &v,
@@ -48,14 +43,14 @@ func (ms *MetricStorage) SaveToFile(filePath string) error {
 	}
 	for name, value := range ms.counter {
 		d := value
-		metrics = append(metrics, Metrics{
+		allMetrics = append(allMetrics, metrics.Metrics{
 			ID:    name,
 			MType: "counter",
 			Delta: &d,
 		})
 	}
 
-	data, err := json.MarshalIndent(metrics, "", "  ")
+	data, err := json.MarshalIndent(allMetrics, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -79,7 +74,7 @@ func (ms *MetricStorage) LoadFromFile(filePath string) error {
 		return err
 	}
 
-	var metrics []Metrics
+	var metrics []metrics.Metrics
 	if err := json.Unmarshal(data, &metrics); err != nil {
 		return err
 	}

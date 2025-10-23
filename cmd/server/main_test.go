@@ -10,27 +10,25 @@ import (
 	"github.com/go-chi/chi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
 )
 
 func Test_postHandler(t *testing.T) {
 	ms := createMetricStorage()
 
 	router := chi.NewRouter()
-
 	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Only POST request allowed!", http.StatusMethodNotAllowed)
 	})
-
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid path format", http.StatusNotFound)
 	})
-
-	router.Post("/update/{type}/{name}/{value}", http.HandlerFunc(postHandler(ms)))
+	router.Post("/update/{type}/{name}/{value}", postHandler(ms, func() {}))
 
 	tests := []struct {
 		name            string
 		method          string
-		contentType     string
 		url             string
 		expectedStatus  int
 		expectedBody    string
@@ -40,7 +38,6 @@ func Test_postHandler(t *testing.T) {
 		{
 			name:            "Valid gauge update",
 			method:          http.MethodPost,
-			contentType:     "text/plain",
 			url:             "/update/gauge/temp/25.5",
 			expectedStatus:  http.StatusOK,
 			expectedGauge:   map[string]float64{"temp": 25.5},
@@ -49,7 +46,6 @@ func Test_postHandler(t *testing.T) {
 		{
 			name:            "Valid counter update",
 			method:          http.MethodPost,
-			contentType:     "text/plain",
 			url:             "/update/counter/req/10",
 			expectedStatus:  http.StatusOK,
 			expectedGauge:   map[string]float64{},
@@ -58,7 +54,6 @@ func Test_postHandler(t *testing.T) {
 		{
 			name:            "Counter increment twice",
 			method:          http.MethodPost,
-			contentType:     "text/plain",
 			url:             "/update/counter/hits/7",
 			expectedStatus:  http.StatusOK,
 			expectedCounter: map[string]int64{"hits": 7},
@@ -66,7 +61,6 @@ func Test_postHandler(t *testing.T) {
 		{
 			name:           "Invalid method",
 			method:         http.MethodGet,
-			contentType:    "text/plain",
 			url:            "/update/gauge/temp/1.0",
 			expectedStatus: http.StatusMethodNotAllowed,
 			expectedBody:   "Only POST request allowed!",
@@ -74,7 +68,6 @@ func Test_postHandler(t *testing.T) {
 		{
 			name:           "Invalid path format",
 			method:         http.MethodPost,
-			contentType:    "text/plain",
 			url:            "/update/gauge/temp",
 			expectedStatus: http.StatusNotFound,
 			expectedBody:   "Invalid path format",
@@ -82,7 +75,6 @@ func Test_postHandler(t *testing.T) {
 		{
 			name:           "Unknown metric type",
 			method:         http.MethodPost,
-			contentType:    "text/plain",
 			url:            "/update/unknown/test/123",
 			expectedStatus: http.StatusBadRequest,
 			expectedBody:   "Unknown metric type",
@@ -90,7 +82,6 @@ func Test_postHandler(t *testing.T) {
 		{
 			name:           "Invalid gauge value",
 			method:         http.MethodPost,
-			contentType:    "text/plain",
 			url:            "/update/gauge/temp/abc",
 			expectedStatus: http.StatusBadRequest,
 			expectedBody:   "Only Float type for Gauge allowed!",
@@ -98,7 +89,6 @@ func Test_postHandler(t *testing.T) {
 		{
 			name:           "Invalid counter value",
 			method:         http.MethodPost,
-			contentType:    "text/plain",
 			url:            "/update/counter/req/xyz",
 			expectedStatus: http.StatusBadRequest,
 			expectedBody:   "Only Int type for Counter allowed!",
@@ -108,36 +98,36 @@ func Test_postHandler(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(tt.method, tt.url, nil)
-			req.Header.Set("Content-Type", tt.contentType)
-
 			rr := httptest.NewRecorder()
 			router.ServeHTTP(rr, req)
 
-			assert.Equal(t, tt.expectedStatus, rr.Code, "HTTP status not equal")
+			assert.Equal(t, tt.expectedStatus, rr.Code, "HTTP status mismatch")
 
-			body := rr.Body.String()
-			assert.Contains(t, body, tt.expectedBody, "Body not include expected text")
+			if tt.expectedBody != "" {
+				assert.Contains(t, rr.Body.String(), tt.expectedBody, "Response body mismatch")
+			}
 
 			for name, value := range tt.expectedGauge {
 				got, exists := ms.gauge[name]
-				assert.True(t, exists, "Expect metric gauge %s", name)
-				assert.Equal(t, value, got, "Value gauge %s not contain", name)
+				assert.True(t, exists, "Expected gauge metric %s not found", name)
+				assert.Equal(t, value, got, "Gauge %s value mismatch", name)
 			}
 
 			for name, value := range tt.expectedCounter {
 				got, exists := ms.counter[name]
-				assert.True(t, exists, "Expect metric counter %s", name)
-				assert.Equal(t, value, got, "Value counter %s not contain", name)
+				assert.True(t, exists, "Expected counter metric %s not found", name)
+				assert.Equal(t, value, got, "Counter %s value mismatch", name)
 			}
 		})
 	}
 }
+
 func Test_updateJSONHandler(t *testing.T) {
 	tests := []struct {
 		name            string
 		jsonBody        string
 		expectedStatus  int
-		expectedBody    string // подстрока в теле ответа
+		expectedBody    string
 		expectedGauge   map[string]float64
 		expectedCounter map[string]int64
 	}{
@@ -219,7 +209,7 @@ func Test_updateJSONHandler(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ms := createMetricStorage()
 			router := chi.NewRouter()
-			router.Post("/update", updateJSONHandler(ms))
+			router.Post("/update", updateJSONHandler(ms, func() {}))
 
 			req := httptest.NewRequest(http.MethodPost, "/update", strings.NewReader(tt.jsonBody))
 			req.Header.Set("Content-Type", "application/json")
@@ -233,14 +223,12 @@ func Test_updateJSONHandler(t *testing.T) {
 				assert.Contains(t, rr.Body.String(), tt.expectedBody, "Response body does not contain expected message")
 			}
 
-			// Проверка gauge
 			for name, expectedValue := range tt.expectedGauge {
 				actualValue, exists := ms.gauge[name]
 				assert.True(t, exists, "Gauge metric %s not found", name)
 				assert.Equal(t, expectedValue, actualValue, "Gauge metric %s has wrong value", name)
 			}
 
-			// Проверка counter
 			for name, expectedValue := range tt.expectedCounter {
 				actualValue, exists := ms.counter[name]
 				assert.True(t, exists, "Counter metric %s not found", name)
@@ -262,14 +250,14 @@ func Test_valueJSONHandler(t *testing.T) {
 		name           string
 		jsonBody       string
 		expectedStatus int
-		expectedMetric *Metrics // ожидаемый объект
+		expectedMetric *metrics.Metrics
 		expectedError  string
 	}{
 		{
 			name:           "Get existing gauge",
 			jsonBody:       `{"id": "Temperature", "type": "gauge"}`,
 			expectedStatus: http.StatusOK,
-			expectedMetric: &Metrics{
+			expectedMetric: &metrics.Metrics{
 				ID:    "Temperature",
 				MType: "gauge",
 				Value: func(v float64) *float64 { return &v }(25.5),
@@ -279,7 +267,7 @@ func Test_valueJSONHandler(t *testing.T) {
 			name:           "Get existing counter",
 			jsonBody:       `{"id": "PollCount", "type": "counter"}`,
 			expectedStatus: http.StatusOK,
-			expectedMetric: &Metrics{
+			expectedMetric: &metrics.Metrics{
 				ID:    "PollCount",
 				MType: "counter",
 				Delta: func(v int64) *int64 { return &v }(42),
@@ -337,7 +325,7 @@ func Test_valueJSONHandler(t *testing.T) {
 			}
 
 			if tt.expectedMetric != nil {
-				var actual Metrics
+				var actual metrics.Metrics
 				err := json.Unmarshal(rr.Body.Bytes(), &actual)
 				require.NoError(t, err)
 

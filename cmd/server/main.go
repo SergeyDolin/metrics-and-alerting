@@ -39,17 +39,26 @@ func main() {
 		}
 	}
 
-	// Фоновое сохранение
+	// Фоновое сохранение, если интервал > 0
 	if flagStoreInterval > 0 && flagFileStoragePath != "" {
 		go func() {
 			ticker := time.NewTicker(flagStoreInterval)
 			defer ticker.Stop()
 			for range ticker.C {
 				if err := ms.SaveToFile(flagFileStoragePath); err != nil {
-					sugar.Errorf("Failed to save metrics: %v", err)
+					sugar.Errorf("Periodic save failed: %v", err)
 				}
 			}
 		}()
+	}
+
+	// Обёртка для синхронного сохранения
+	saveSync := func() {
+		if flagStoreInterval == 0 && flagFileStoragePath != "" {
+			if err := ms.SaveToFile(flagFileStoragePath); err != nil {
+				sugar.Errorf("Sync save failed: %v", err)
+			}
+		}
 	}
 
 	// router.Use(recoverMiddleware(sugar))
@@ -66,9 +75,9 @@ func main() {
 	})
 
 	router.Get("/", indexHandler(ms))
-	router.Post("/update", updateJSONHandler(ms))
+	router.Post("/update", updateJSONHandler(ms, saveSync))
 	router.Post("/value", valueJSONHandler(ms))
-	router.Post("/update/{type}/{name}/{value}", postHandler(ms))
+	router.Post("/update/{type}/{name}/{value}", postHandler(ms, saveSync))
 	router.Get("/value/{type}/{name}", getHandler(ms))
 
 	sugar.Infof("Running server on %s", flagRunAddr)
