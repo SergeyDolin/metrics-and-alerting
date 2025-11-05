@@ -12,7 +12,7 @@ var (
 	flagStoreInterval   time.Duration
 	flagFileStoragePath string
 	flagRestore         bool
-	flagSql             string
+	flagSQL             string
 )
 
 // parseFlags обрабатывает аргументы командной строки и переменные окружения.
@@ -33,7 +33,7 @@ func parseFlags() {
 	flag.BoolVar(&flagRestore, "r", false, "restore metrics from file on startup")
 
 	// --- SQL ---
-	flag.StringVar(&flagSql, "d", "video", "DB address")
+	flag.StringVar(&flagSQL, "d", "video", "DB address")
 
 	// Парсим флаги
 	flag.Parse()
@@ -61,6 +61,6 @@ func parseFlags() {
 	}
 
 	if dbName := os.Getenv("DATABASE_DSN"); dbName != "" {
-		flagSql = dbName
+		flagSQL = dbName
 	}
 }

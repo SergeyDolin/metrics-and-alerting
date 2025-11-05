@@ -76,7 +76,7 @@ func main() {
 
 	router.Get("/", indexHandler(ms))
 	router.Post("/update", updateJSONHandler(ms, saveSync))
-	router.Get("/ping", pingSQLHandler(flagSql))
+	router.Get("/ping", pingSQLHandler(flagSQL))
 	router.Post("/value", valueJSONHandler(ms))
 	router.Post("/update/{type}/{name}/{value}", postHandler(ms, saveSync))
 	router.Get("/value/{type}/{name}", getHandler(ms))
