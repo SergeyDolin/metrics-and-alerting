@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/go-chi/chi"
 
@@ -275,5 +280,30 @@ func valueJSONHandler(ms *MetricStorage) http.HandlerFunc {
 		}
 
 		http.Error(res, "Metric not found", http.StatusNotFound)
+	}
+}
+
+func pingSQLHandler(dbName string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Only GET request allowed!", http.StatusMethodNotAllowed)
+			return
+		}
+
+		ps := fmt.Sprintf("host=%s user=%s password=%s dbname=%s sslmode=disable",
+			`localhost`, `video`, `XXXXXXXX`, dbName)
+		db, err := sql.Open("psx", ps)
+		if err != nil {
+			http.Error(w, "Couldn't connect to the database", http.StatusInternalServerError)
+			return
+		}
+		defer db.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		if err = db.PingContext(ctx); err != nil {
+			panic(err)
+		}
+		w.WriteHeader(http.StatusOK)
 	}
 }
