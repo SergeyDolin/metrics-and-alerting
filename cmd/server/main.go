@@ -1,25 +1,15 @@
 package main
 
 import (
-	"flag"
-	"log"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi"
+
+	"go.uber.org/zap"
+
+	"github.com/go-chi/chi/middleware"
 )
-
-// переменная flagRunAddr содержит адрес и порт для запуска сервера
-var flagRunAddr string
-
-// parseFlags обрабатывает аргументы командной строки
-// и сохраняет их значения в соответствующих переменных
-func parseFlags() {
-	// регистрируем переменную flagRunAddr
-	// как аргумент -a со значением localhost:8080 по умолчанию
-	flag.StringVar(&flagRunAddr, "a", "localhost:8080", "address and port to run server")
-	// парсим переданные серверу аргументы в зарегистрированные переменные
-	flag.Parse()
-}
 
 // main — точка входа приложения.
 // Инициализирует роутер chi, создаёт хранилище метрик и настраивает маршруты:
@@ -31,11 +21,50 @@ func parseFlags() {
 func main() {
 	parseFlags()
 
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		panic("cannot initialize zap")
+	}
+	defer logger.Sync()
+
+	sugar := logger.Sugar()
+
 	router := chi.NewRouter()
 	ms := createMetricStorage()
 
-	router.Use(recoverMiddleware)
-	router.Use(logMiddleware)
+	// Загрузка при старте
+	if flagRestore && flagFileStoragePath != "" {
+		if err := ms.LoadFromFile(flagFileStoragePath); err != nil {
+			sugar.Warnf("Failed to restore metrics: %v", err)
+		}
+	}
+
+	// Фоновое сохранение, если интервал > 0
+	if flagStoreInterval > 0 && flagFileStoragePath != "" {
+		go func() {
+			ticker := time.NewTicker(flagStoreInterval)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := ms.SaveToFile(flagFileStoragePath); err != nil {
+					sugar.Errorf("Periodic save failed: %v", err)
+				}
+			}
+		}()
+	}
+
+	// Обёртка для синхронного сохранения
+	saveSync := func() {
+		if flagStoreInterval == 0 && flagFileStoragePath != "" {
+			if err := ms.SaveToFile(flagFileStoragePath); err != nil {
+				sugar.Errorf("Sync save failed: %v", err)
+			}
+		}
+	}
+
+	// router.Use(recoverMiddleware(sugar))
+	router.Use(middleware.StripSlashes)
+	router.Use(gzipMiddleware)
+	router.Use(logMiddleware(sugar))
 
 	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -45,15 +74,13 @@ func main() {
 		http.Error(w, "Invalid path format", http.StatusNotFound)
 	})
 
-	router.Route("/", func(r chi.Router) {
-		r.Get("/", indexHandler(ms))
-		r.Route("/update", func(r chi.Router) {
-			r.Post("/{type}/{name}/{value}", postHandler(ms))
-		})
-		r.Route("/value", func(r chi.Router) {
-			r.Get("/{type}/{name}", getHandler(ms))
-		})
-	})
-	log.Printf("Running server on %s", flagRunAddr)
-	log.Fatal(http.ListenAndServe(flagRunAddr, router))
+	router.Get("/", indexHandler(ms))
+	router.Post("/update", updateJSONHandler(ms, saveSync))
+	router.Get("/ping", pingSQLHandler(flagSQL))
+	router.Post("/value", valueJSONHandler(ms))
+	router.Post("/update/{type}/{name}/{value}", postHandler(ms, saveSync))
+	router.Get("/value/{type}/{name}", getHandler(ms))
+
+	sugar.Infof("Running server on %s", flagRunAddr)
+	sugar.Fatal(http.ListenAndServe(flagRunAddr, router))
 }
