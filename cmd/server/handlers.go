@@ -290,11 +290,14 @@ func pingSQLHandler(dbName string) http.HandlerFunc {
 			return
 		}
 
-		ps := fmt.Sprintf("host=%s user=%s password=%s dbname=%s sslmode=disable",
-			`localhost`, `video`, `XXXXXXXX`, dbName)
-		db, err := sql.Open("psx", ps)
+		if dbName == "" {
+			http.Error(w, "DATABASE_DSN is not configured", http.StatusInternalServerError)
+			return
+		}
+
+		db, err := sql.Open("pgx", dbName)
 		if err != nil {
-			http.Error(w, "Couldn't connect to the database", http.StatusInternalServerError)
+			http.Error(w, "Couldn't connect to the database: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		defer db.Close()

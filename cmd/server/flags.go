@@ -33,7 +33,7 @@ func parseFlags() {
 	flag.BoolVar(&flagRestore, "r", false, "restore metrics from file on startup")
 
 	// --- SQL ---
-	flag.StringVar(&flagSQL, "d", "video", "DB address")
+	flag.StringVar(&flagSQL, "d", "", "DB address")
 
 	// Парсим флаги
 	flag.Parse()
