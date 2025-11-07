@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"syscall"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
 )
@@ -94,5 +98,89 @@ func (ms *MetricStorage) LoadFromFile(filePath string) error {
 			}
 		}
 	}
+	return nil
+}
+
+func (ms *MetricStorage) createTables(dbName string) error {
+	_, err := ms.db.ExecContext(context.Background(), `
+		CREATE TABLE IF NOT EXISTS gauge (
+			name TEXT PRIMARY KEY,
+			value DOUBLE PRECISION NOT NULL
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("create gauge table: %w", err)
+	}
+
+	_, err = ms.db.ExecContext(context.Background(), `
+		CREATE TABLE IF NOT EXISTS counter (
+			name TEXT PRIMARY KEY,
+			value BIGINT NOT NULL
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("create counter table: %w", err)
+	}
+
+	return nil
+}
+
+func (ms *MetricStorage) saveToDB() {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	for name, value := range ms.gauge {
+		_, err := ms.db.ExecContext(context.Background(),
+			`INSERT INTO gauge (name, value) VALUES ($1, $2) 
+			 ON CONFLICT (name) DO UPDATE SET value = $2`,
+			name, value)
+		if err != nil {
+			fmt.Printf("Failed to save gauge %s: %v\n", name, err)
+		}
+	}
+
+	for name, value := range ms.counter {
+		_, err := ms.db.ExecContext(context.Background(),
+			`INSERT INTO counter (name, value) VALUES ($1, $2) 
+			 ON CONFLICT (name) DO UPDATE SET value = $2`,
+			name, value)
+		if err != nil {
+			fmt.Printf("Failed to save counter %s: %v\n", name, err)
+		}
+	}
+}
+
+func (ms *MetricStorage) loadFromDB() error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	rows, err := ms.db.QueryContext(context.Background(), `SELECT name, value FROM gauge`)
+	if err != nil {
+		return fmt.Errorf("query gauge: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var value float64
+		if err := rows.Scan(&name, &value); err != nil {
+			return fmt.Errorf("scan gauge: %w", err)
+		}
+		ms.gauge[name] = value
+	}
+
+	rows, err = ms.db.QueryContext(context.Background(), `SELECT name, value FROM counter`)
+	if err != nil {
+		return fmt.Errorf("query counter: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var value int64
+		if err := rows.Scan(&name, &value); err != nil {
+			return fmt.Errorf("scan counter: %w", err)
+		}
+		ms.counter[name] = value
+	}
+
 	return nil
 }

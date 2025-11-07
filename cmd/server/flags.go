@@ -33,12 +33,10 @@ func parseFlags() {
 	flag.BoolVar(&flagRestore, "r", false, "restore metrics from file on startup")
 
 	// --- SQL ---
-	flag.StringVar(&flagSQL, "d", "", "DB address")
+	flag.StringVar(&flagSQL, "d", "postgres://user:pass@localhost:5432/metrics?sslmode=disable", "DB address")
 
 	// Парсим флаги
 	flag.Parse()
-
-	// Переопределяем значения из переменных окружения, если они заданы
 
 	if address := os.Getenv("ADDRESS"); address != "" {
 		flagRunAddr = address
@@ -48,7 +46,6 @@ func parseFlags() {
 		if seconds, err := strconv.Atoi(intervalStr); err == nil {
 			flagStoreInterval = time.Duration(seconds) * time.Second
 		}
-		// Если не удалось распарсить — оставляем значение из флага (уже задано)
 	}
 
 	if filePath := os.Getenv("FILE_STORAGE_PATH"); filePath != "" {
@@ -56,7 +53,6 @@ func parseFlags() {
 	}
 
 	if restoreStr := os.Getenv("RESTORE"); restoreStr != "" {
-		// Сравниваем case-insensitive, но по ТЗ — true/false, так что достаточно == "true"
 		flagRestore = restoreStr == "true"
 	}
 

@@ -1,22 +1,32 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/go-chi/chi"
+	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
 )
 
-func Test_postHandler(t *testing.T) {
-	ms := createMetricStorage()
+const testDB = "postgres://user:pass@localhost:5432/postgres?sslmode=disable"
 
+func Test_postHandler(t *testing.T) {
+	ms := &MetricStorage{
+		gauge:   make(map[string]float64),
+		counter: make(map[string]int64),
+	}
 	router := chi.NewRouter()
 	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Only POST request allowed!", http.StatusMethodNotAllowed)
@@ -207,7 +217,10 @@ func Test_updateJSONHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ms := createMetricStorage()
+			ms := &MetricStorage{
+				gauge:   make(map[string]float64),
+				counter: make(map[string]int64),
+			}
 			router := chi.NewRouter()
 			router.Post("/update", updateJSONHandler(ms, func() {}))
 
@@ -239,7 +252,10 @@ func Test_updateJSONHandler(t *testing.T) {
 }
 
 func Test_valueJSONHandler(t *testing.T) {
-	ms := createMetricStorage()
+	ms := &MetricStorage{
+		gauge:   make(map[string]float64),
+		counter: make(map[string]int64),
+	}
 	ms.updateGauge("Temperature", 25.5)
 	ms.updateCounter("PollCount", 42)
 
@@ -345,4 +361,75 @@ func Test_valueJSONHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func setupTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+
+	_, filename, _, _ := runtime.Caller(0)
+	projectRoot := filepath.Join(filepath.Dir(filename), "..", "..")
+	migrationsDir := filepath.Join(projectRoot, "migrations")
+	migrationsDir, err := filepath.Abs(migrationsDir)
+	require.NoError(t, err)
+
+	t.Logf("Using migrations dir: %s", migrationsDir)
+	_, err = os.Stat(migrationsDir)
+	require.NoError(t, err, "migrations dir not found")
+
+	adminDB, err := sql.Open("pgx", testDB)
+	require.NoError(t, err)
+	defer adminDB.Close()
+
+	_, err = adminDB.ExecContext(context.Background(), "DROP DATABASE IF EXISTS test_metrics")
+	require.NoError(t, err)
+	_, err = adminDB.ExecContext(context.Background(), "CREATE DATABASE test_metrics")
+	require.NoError(t, err)
+
+	db, err := sql.Open("pgx", testDB)
+	require.NoError(t, err)
+
+	goose.SetLogger(goose.NopLogger())
+	require.NoError(t, goose.SetDialect("postgres"))
+	require.NoError(t, goose.Up(db, migrationsDir))
+
+	return db
+}
+
+func teardownTestDB(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if db != nil {
+		db.Close()
+	}
+
+	adminDB, err := sql.Open("pgx", "postgres://user:pass@localhost:5432/postgres?sslmode=disable")
+	require.NoError(t, err)
+	defer adminDB.Close()
+
+	_, err = adminDB.ExecContext(context.Background(), "DROP DATABASE IF EXISTS test_metrics")
+	require.NoError(t, err)
+}
+func Test_Migrations_Applied(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(t, db)
+
+	var exists bool
+	err := db.QueryRow(`
+		SELECT EXISTS (
+			SELECT FROM information_schema.tables 
+			WHERE table_schema = 'public' 
+			AND table_name = 'gauge'
+		)
+	`).Scan(&exists)
+	require.NoError(t, err)
+	assert.True(t, exists, "Table 'gauge' should exist after migrations")
+
+	err = db.QueryRow(`
+		SELECT EXISTS (
+			SELECT FROM information_schema.tables 
+			WHERE table_schema = 'public' 
+			AND table_name = 'counter'
+		)
+	`).Scan(&exists)
+	require.NoError(t, err)
+	assert.True(t, exists, "Table 'counter' should exist after migrations")
 }
