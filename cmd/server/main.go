@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"net/http"
 	"time"
@@ -28,26 +29,30 @@ func main() {
 		panic("cannot initialize zap")
 	}
 	defer logger.Sync()
-
 	sugar := logger.Sugar()
+
 	router := chi.NewRouter()
-
 	var ms *MetricStorage
+	var saveSync func()
 
-	// Загрузка при старте
 	if flagSQL != "" {
+		sugar.Infof("Initializing PostgreSQL storage with DSN: %s", flagSQL)
+
 		db, err := sql.Open("pgx", flagSQL)
 		if err != nil {
-			sugar.Warnf("Failed to open DB: %v", err)
+			sugar.Fatalf("Failed to open DB connection: %v", err)
 		}
-		if err := db.Ping(); err != nil {
-			db.Close()
-			sugar.Warnf("Failed to ping DB: %v", err)
+		defer db.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err = db.PingContext(ctx)
+		cancel()
+		if err != nil {
+			sugar.Fatalf("Failed to ping DB: %v", err)
 		}
 
 		if err := storage.RunMigrations(db); err != nil {
-			db.Close()
-			sugar.Warnf("Migrations failed: %v", err)
+			sugar.Fatalf("Migrations failed: %v", err)
 		}
 
 		ms = &MetricStorage{
@@ -57,50 +62,48 @@ func main() {
 		}
 
 		if err := ms.loadFromDB(); err != nil {
-			sugar.Warnf("Failed to load metrics: %v", err)
+			sugar.Warnf("Failed to load metrics from DB: %v", err)
 		}
-	} else if flagFileStoragePath != "" {
-		ms, err = createMetricStorage("")
-		if err != nil {
-			sugar.Warnf("Failed DB: %v", err)
+
+		saveSync = func() {
+			ms.saveToDB()
 		}
-		if flagRestore {
+
+	} else {
+		ms = &MetricStorage{
+			gauge:   make(map[string]float64),
+			counter: make(map[string]int64),
+		}
+
+		if flagFileStoragePath != "" && flagRestore {
 			if err := ms.LoadFromFile(flagFileStoragePath); err != nil {
 				sugar.Warnf("Failed to restore metrics from file: %v", err)
 			}
 		}
-	} else {
-		ms, err = createMetricStorage("")
-		if err != nil {
-			sugar.Warnf("Failed DB: %v", err)
-		}
-	}
 
-	// Фоновое сохранение, если интервал > 0 и нет базы данных
-	if flagStoreInterval > 0 && flagFileStoragePath != "" && flagSQL == "" {
-		go func() {
-			ticker := time.NewTicker(flagStoreInterval)
-			defer ticker.Stop()
-			for range ticker.C {
+		// Фоновое сохранение
+		if flagStoreInterval > 0 && flagFileStoragePath != "" {
+			go func() {
+				ticker := time.NewTicker(flagStoreInterval)
+				defer ticker.Stop()
+				for range ticker.C {
+					if err := ms.SaveToFile(flagFileStoragePath); err != nil {
+						sugar.Errorf("Periodic save failed: %v", err)
+					}
+				}
+			}()
+		}
+
+		// Обёртка сохранения для файла/памяти
+		saveSync = func() {
+			if flagStoreInterval == 0 && flagFileStoragePath != "" {
 				if err := ms.SaveToFile(flagFileStoragePath); err != nil {
-					sugar.Errorf("Periodic save failed: %v", err)
+					sugar.Errorf("Sync save failed: %v", err)
 				}
 			}
-		}()
-	}
-
-	// Обёртка для синхронного сохранения
-	saveSync := func() {
-		if flagSQL != "" {
-			ms.saveToDB()
-		} else if flagStoreInterval == 0 && flagFileStoragePath != "" {
-			if err := ms.SaveToFile(flagFileStoragePath); err != nil {
-				sugar.Errorf("Sync save failed: %v", err)
-			}
 		}
 	}
 
-	// router.Use(recoverMiddleware(sugar))
 	router.Use(middleware.StripSlashes)
 	router.Use(gzipMiddleware)
 	router.Use(logMiddleware(sugar))
@@ -108,10 +111,21 @@ func main() {
 	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	})
-
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid path format", http.StatusNotFound)
 	})
+
+	if flagSQL != "" {
+		saveSync = func() { ms.saveToDB() }
+	} else {
+		saveSync = func() {
+			if flagStoreInterval == 0 && flagFileStoragePath != "" {
+				if err := ms.SaveToFile(flagFileStoragePath); err != nil {
+					sugar.Errorf("Sync save failed: %v", err)
+				}
+			}
+		}
+	}
 
 	router.Get("/", indexHandler(ms))
 	router.Post("/update", updateJSONHandler(ms, saveSync))
