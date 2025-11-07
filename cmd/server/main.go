@@ -38,16 +38,16 @@ func main() {
 	if flagSQL != "" {
 		db, err := sql.Open("pgx", flagSQL)
 		if err != nil {
-			sugar.Fatalf("Failed to open DB: %v", err)
+			sugar.Warnf("Failed to open DB: %v", err)
 		}
 		if err := db.Ping(); err != nil {
 			db.Close()
-			sugar.Fatalf("Failed to ping DB: %v", err)
+			sugar.Warnf("Failed to ping DB: %v", err)
 		}
 
 		if err := storage.RunMigrations(db); err != nil {
 			db.Close()
-			sugar.Fatalf("Migrations failed: %v", err)
+			sugar.Warnf("Migrations failed: %v", err)
 		}
 
 		ms = &MetricStorage{
