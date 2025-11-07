@@ -159,6 +159,7 @@ func (ms *MetricStorage) loadFromDB() error {
 		return fmt.Errorf("query gauge: %w", err)
 	}
 	defer rows.Close()
+
 	for rows.Next() {
 		var name string
 		var value float64
@@ -168,11 +169,16 @@ func (ms *MetricStorage) loadFromDB() error {
 		ms.gauge[name] = value
 	}
 
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate gauge rows: %w", err)
+	}
+
 	rows, err = ms.db.QueryContext(context.Background(), `SELECT name, value FROM counter`)
 	if err != nil {
 		return fmt.Errorf("query counter: %w", err)
 	}
 	defer rows.Close()
+
 	for rows.Next() {
 		var name string
 		var value int64
@@ -180,6 +186,10 @@ func (ms *MetricStorage) loadFromDB() error {
 			return fmt.Errorf("scan counter: %w", err)
 		}
 		ms.counter[name] = value
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate counter rows: %w", err)
 	}
 
 	return nil
