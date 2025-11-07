@@ -115,18 +115,6 @@ func main() {
 		http.Error(w, "Invalid path format", http.StatusNotFound)
 	})
 
-	if flagSQL != "" {
-		saveSync = func() { ms.saveToDB() }
-	} else {
-		saveSync = func() {
-			if flagStoreInterval == 0 && flagFileStoragePath != "" {
-				if err := ms.SaveToFile(flagFileStoragePath); err != nil {
-					sugar.Errorf("Sync save failed: %v", err)
-				}
-			}
-		}
-	}
-
 	router.Get("/", indexHandler(ms))
 	router.Post("/update", updateJSONHandler(ms, saveSync))
 	router.Get("/ping", pingSQLHandler(flagSQL))
