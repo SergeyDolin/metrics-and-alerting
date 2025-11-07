@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi"
 	"github.com/pressly/goose/v3"
@@ -401,7 +402,7 @@ func teardownTestDB(t *testing.T, db *sql.DB) {
 		db.Close()
 	}
 
-	adminDB, err := sql.Open("pgx", "postgres://user:pass@localhost:5432/postgres?sslmode=disable")
+	adminDB, err := sql.Open("pgx", testDB)
 	require.NoError(t, err)
 	defer adminDB.Close()
 
@@ -409,11 +410,24 @@ func teardownTestDB(t *testing.T, db *sql.DB) {
 	require.NoError(t, err)
 }
 func Test_Migrations_Applied(t *testing.T) {
+
+	adminDB, err := sql.Open("pgx", testDB)
+	if err != nil {
+		t.Skip("PostgreSQL client init failed, skipping migration test")
+	}
+	defer adminDB.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := adminDB.PingContext(ctx); err != nil {
+		t.Skip("PostgreSQL not reachable, skipping migration test")
+	}
+
 	db := setupTestDB(t)
 	defer teardownTestDB(t, db)
 
 	var exists bool
-	err := db.QueryRow(`
+	err = db.QueryRow(`
 		SELECT EXISTS (
 			SELECT FROM information_schema.tables 
 			WHERE table_schema = 'public' 
