@@ -33,7 +33,6 @@ func main() {
 	router := chi.NewRouter()
 
 	var ms *MetricStorage
-	var closeDB func()
 
 	// Загрузка при старте
 	if flagSQL != "" {
@@ -60,12 +59,6 @@ func main() {
 		if err := ms.loadFromDB(); err != nil {
 			sugar.Warnf("Failed to load metrics: %v", err)
 		}
-
-		closeDB = func() {
-			if ms.db != nil {
-				ms.db.Close()
-			}
-		}
 	} else if flagFileStoragePath != "" {
 		ms, err = createMetricStorage("")
 		if err != nil {
@@ -76,20 +69,11 @@ func main() {
 				sugar.Warnf("Failed to restore metrics from file: %v", err)
 			}
 		}
-		closeDB = func() {
-			// Синхронное сохранение при завершении
-			if flagStoreInterval == 0 && flagFileStoragePath != "" {
-				if err := ms.SaveToFile(flagFileStoragePath); err != nil {
-					sugar.Errorf("Final save failed: %v", err)
-				}
-			}
-		}
 	} else {
 		ms, err = createMetricStorage("")
 		if err != nil {
 			sugar.Warnf("Failed DB: %v", err)
 		}
-		closeDB = func() {}
 	}
 
 	// Фоновое сохранение, если интервал > 0 и нет базы данных
@@ -138,6 +122,4 @@ func main() {
 
 	sugar.Infof("Running server on %s", flagRunAddr)
 	sugar.Fatal(http.ListenAndServe(flagRunAddr, router))
-
-	closeDB()
 }
