@@ -176,13 +176,13 @@ func (ms *MetricStorage) saveToDB() {
 	if err != nil {
 		return
 	}
-	stmt_g, err := tx.PrepareContext(context.Background(), `INSERT INTO gauge (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`)
+	stmtG, err := tx.PrepareContext(context.Background(), `INSERT INTO gauge (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`)
 	if err != nil {
 		return
 	}
-	defer stmt_g.Close()
+	defer stmtG.Close()
 
-	err = saveBatch(stmt_g, func(m map[string]float64) map[string]interface{} {
+	err = saveBatch(stmtG, func(m map[string]float64) map[string]interface{} {
 		result := make(map[string]interface{})
 		for k, v := range m {
 			result[k] = v
@@ -194,13 +194,13 @@ func (ms *MetricStorage) saveToDB() {
 		fmt.Printf("Failed to save gauge metrics after retries: %v\n", err)
 	}
 
-	stmt_c, err := tx.PrepareContext(context.Background(), `INSERT INTO counter (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`)
+	stmtC, err := tx.PrepareContext(context.Background(), `INSERT INTO counter (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`)
 	if err != nil {
 		return
 	}
-	defer stmt_c.Close()
+	defer stmtC.Close()
 
-	err = saveBatch(stmt_c, func(m map[string]int64) map[string]interface{} {
+	err = saveBatch(stmtC, func(m map[string]int64) map[string]interface{} {
 		result := make(map[string]interface{})
 		for k, v := range m {
 			result[k] = v
