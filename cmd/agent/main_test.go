@@ -199,3 +199,67 @@ func Test_sendMetricJSON_GzipCompression(t *testing.T) {
 	assert.Equal(t, metricType, metric.MType)
 	assert.Equal(t, value, *metric.Value)
 }
+func Test_sendBatchJSON_Success(t *testing.T) {
+	var receivedMetrics []Metrics
+	var contentEncoding string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/updates", r.URL.Path)
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		contentEncoding = r.Header.Get("Content-Encoding")
+
+		gz, err := gzip.NewReader(r.Body)
+		assert.NoError(t, err)
+		defer gz.Close()
+
+		body, err := io.ReadAll(gz)
+		assert.NoError(t, err)
+
+		err = json.Unmarshal(body, &receivedMetrics)
+		assert.NoError(t, err)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(receivedMetrics)
+	}))
+	defer server.Close()
+
+	serverAddr := strings.TrimPrefix(server.URL, "http://")
+
+	batch := []Metrics{
+		{ID: "Gauge1", MType: "gauge", Value: func(v float64) *float64 { return &v }(1.1)},
+		{ID: "Counter1", MType: "counter", Delta: func(v int64) *int64 { return &v }(2)},
+	}
+
+	err := sendBatchJSON(batch, serverAddr)
+	assert.NoError(t, err)
+	assert.Equal(t, "gzip", contentEncoding)
+	assert.Len(t, receivedMetrics, 2)
+
+	gotGauge := false
+	gotCounter := false
+	for _, m := range receivedMetrics {
+		if m.ID == "Gauge1" && m.MType == "gauge" && *m.Value == 1.1 {
+			gotGauge = true
+		}
+		if m.ID == "Counter1" && m.MType == "counter" && *m.Delta == 2 {
+			gotCounter = true
+		}
+	}
+	assert.True(t, gotGauge)
+	assert.True(t, gotCounter)
+}
+func Test_sendBatchJSON_EmptyBatch(t *testing.T) {
+	// Запускаем сервер, но он не должен получить запрос
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("Server should not receive request for empty batch")
+	}))
+	defer server.Close()
+
+	serverAddr := strings.TrimPrefix(server.URL, "http://")
+
+	// Пустой срез
+	err := sendBatchJSON([]Metrics{}, serverAddr)
+	assert.NoError(t, err) // должно завершиться без ошибки и без запроса
+}

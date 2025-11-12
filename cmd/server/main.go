@@ -117,6 +117,7 @@ func main() {
 
 	router.Get("/", indexHandler(ms))
 	router.Post("/update", updateJSONHandler(ms, saveSync))
+	router.Post("/updates", updatesBatchHandler(ms, saveSync))
 	router.Get("/ping", pingSQLHandler(flagSQL))
 	router.Post("/value", valueJSONHandler(ms))
 	router.Post("/update/{type}/{name}/{value}", postHandler(ms, saveSync))

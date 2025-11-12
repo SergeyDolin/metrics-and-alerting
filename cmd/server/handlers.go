@@ -310,3 +310,78 @@ func pingSQLHandler(dbName string) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 	}
 }
+
+func updatesBatchHandler(ms *MetricStorage, saveFunc func()) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		var metricsList []metrics.Metrics
+
+		if r.Method != http.MethodPost {
+			http.Error(w, "Only POST request allowed!", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&metricsList); err != nil {
+			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if len(metricsList) == 0 {
+			http.Error(w, "Empty batch not allowed", http.StatusBadRequest)
+			return
+		}
+
+		for _, m := range metricsList {
+			if m.ID == "" {
+				http.Error(w, "Missing metric ID in batch", http.StatusBadRequest)
+				return
+			}
+
+			switch MetricType(m.MType) {
+			case MetricTypeGauge:
+				if m.Value == nil {
+					http.Error(w, fmt.Sprintf("Missing 'value' for gauge metric %s", m.ID), http.StatusBadRequest)
+					return
+				}
+				if m.Delta != nil {
+					http.Error(w, fmt.Sprintf("Unexpected 'delta' for gauge metric %s", m.ID), http.StatusBadRequest)
+					return
+				}
+			case MetricTypeCounter:
+				if m.Delta == nil {
+					http.Error(w, fmt.Sprintf("Missing 'delta' for counter metric %s", m.ID), http.StatusBadRequest)
+					return
+				}
+				if m.Value != nil {
+					http.Error(w, fmt.Sprintf("Unexpected 'value' for counter metric %s", m.ID), http.StatusBadRequest)
+					return
+				}
+			default:
+				http.Error(w, fmt.Sprintf("Unknown metric type for %s", m.ID), http.StatusBadRequest)
+				return
+			}
+		}
+
+		ms.mu.Lock()
+		for _, m := range metricsList {
+			switch MetricType(m.MType) {
+			case MetricTypeGauge:
+				ms.gauge[m.ID] = *m.Value
+			case MetricTypeCounter:
+				if _, ok := ms.counter[m.ID]; !ok {
+					ms.counter[m.ID] = 0
+				}
+				ms.counter[m.ID] += *m.Delta
+			}
+		}
+		ms.mu.Unlock()
+
+		saveFunc()
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(metricsList); err != nil {
+			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+			return
+		}
+	}
+}

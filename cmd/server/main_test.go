@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -446,4 +448,156 @@ func Test_Migrations_Applied(t *testing.T) {
 	`).Scan(&exists)
 	require.NoError(t, err)
 	assert.True(t, exists, "Table 'counter' should exist after migrations")
+}
+func Test_batchUpdateHandler(t *testing.T) {
+	tests := []struct {
+		name            string
+		jsonBody        string
+		expectedStatus  int
+		expectedBody    string
+		expectedGauge   map[string]float64
+		expectedCounter map[string]int64
+	}{
+		{
+			name: "Valid batch with gauge and counter",
+			jsonBody: `[
+				{"id": "Temperature", "type": "gauge", "value": 25.6},
+				{"id": "PollCount", "type": "counter", "delta": 1}
+			]`,
+			expectedStatus:  http.StatusOK,
+			expectedGauge:   map[string]float64{"Temperature": 25.6},
+			expectedCounter: map[string]int64{"PollCount": 1},
+		},
+		{
+			name: "Batch with multiple gauges",
+			jsonBody: `[
+				{"id": "Alloc", "type": "gauge", "value": 1024.0},
+				{"id": "RandomValue", "type": "gauge", "value": 0.123}
+			]`,
+			expectedStatus: http.StatusOK,
+			expectedGauge: map[string]float64{
+				"Alloc":       1024.0,
+				"RandomValue": 0.123,
+			},
+		},
+		{
+			name: "Batch with multiple counters",
+			jsonBody: `[
+				{"id": "Hits", "type": "counter", "delta": 5},
+				{"id": "Errors", "type": "counter", "delta": 2}
+			]`,
+			expectedStatus:  http.StatusOK,
+			expectedCounter: map[string]int64{"Hits": 5, "Errors": 2},
+		},
+		{
+			name:           "Empty batch",
+			jsonBody:       `[]`,
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Empty batch not allowed",
+		},
+		{
+			name:           "Invalid JSON",
+			jsonBody:       `[{"id": "Test", "type": "gauge", "value": ]`,
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Invalid JSON",
+		},
+		{
+			name: "Missing ID in one metric",
+			jsonBody: `[
+				{"id": "Temp", "type": "gauge", "value": 1.0},
+				{"type": "counter", "delta": 1}
+			]`,
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Missing metric ID",
+		},
+		{
+			name: "Gauge without value",
+			jsonBody: `[
+				{"id": "Test", "type": "gauge"}
+			]`,
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Missing 'value' for gauge metric",
+		},
+		{
+			name:           "Counter with value but no delta",
+			jsonBody:       `[{"id": "Test", "type": "counter", "value": 5.0}]`,
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Missing 'delta' for counter metric",
+		},
+		{
+			name:           "Counter with both delta and value (invalid)",
+			jsonBody:       `[{"id": "Test", "type": "counter", "delta": 1, "value": 5.0}]`,
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Unexpected 'value' for counter metric",
+		},
+		{
+			name: "Unknown metric type",
+			jsonBody: `[
+				{"id": "Test", "type": "unknown", "value": 100}
+			]`,
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Unknown metric type",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ms := &MetricStorage{
+				gauge:   make(map[string]float64),
+				counter: make(map[string]int64),
+			}
+			router := chi.NewRouter()
+			router.Post("/updates/", updatesBatchHandler(ms, func() {}))
+
+			req := httptest.NewRequest(http.MethodPost, "/updates/", strings.NewReader(tt.jsonBody))
+			req.Header.Set("Content-Type", "application/json")
+
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
+
+			assert.Equal(t, tt.expectedStatus, rr.Code, "Status code mismatch")
+
+			if tt.expectedBody != "" {
+				assert.Contains(t, rr.Body.String(), tt.expectedBody, "Expected error message not found")
+			}
+
+			for name, expected := range tt.expectedGauge {
+				actual, ok := ms.gauge[name]
+				assert.True(t, ok, "Gauge %s not found", name)
+				assert.Equal(t, expected, actual, "Gauge %s value mismatch", name)
+			}
+
+			for name, expected := range tt.expectedCounter {
+				actual, ok := ms.counter[name]
+				assert.True(t, ok, "Counter %s not found", name)
+				assert.Equal(t, expected, actual, "Counter %s value mismatch", name)
+			}
+		})
+	}
+}
+func Test_batchUpdateHandler_Gzip(t *testing.T) {
+	ms := &MetricStorage{
+		gauge:   make(map[string]float64),
+		counter: make(map[string]int64),
+	}
+	router := chi.NewRouter()
+	router.Use(gzipMiddleware) // важно: используем тот же middleware, что и в main
+	router.Post("/updates/", updatesBatchHandler(ms, func() {}))
+
+	// Подготавливаем сжатое тело
+	data := `[{"id": "GzipTest", "type": "gauge", "value": 42.0}]`
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	gz.Write([]byte(data))
+	gz.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/updates/", &buf)
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, 42.0, ms.gauge["GzipTest"])
 }
