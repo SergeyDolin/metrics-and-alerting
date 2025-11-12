@@ -2,14 +2,19 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
+	"github.com/SergeyDolin/metrics-and-alerting/internal/pgerrors"
 )
 
 // updateGauge — обновляет или устанавливает значение метрики типа gauge по имени.
@@ -126,27 +131,85 @@ func (ms *MetricStorage) createTables(dbName string) error {
 }
 
 func (ms *MetricStorage) saveToDB() {
+	classifier := pgerrors.NewPostgresErrorClassifier()
+
+	backoffDelays := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
+	maxRetries := len(backoffDelays)
+
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
-	for name, value := range ms.gauge {
-		_, err := ms.db.ExecContext(context.Background(),
-			`INSERT INTO gauge (name, value) VALUES ($1, $2) 
-			 ON CONFLICT (name) DO UPDATE SET value = $2`,
-			name, value)
-		if err != nil {
-			fmt.Printf("Failed to save gauge %s: %v\n", name, err)
-		}
+	gaugeMetrics := make(map[string]float64)
+	for k, v := range ms.gauge {
+		gaugeMetrics[k] = v
+	}
+	counterMetrics := make(map[string]int64)
+	for k, v := range ms.counter {
+		counterMetrics[k] = v
 	}
 
-	for name, value := range ms.counter {
-		_, err := ms.db.ExecContext(context.Background(),
-			`INSERT INTO counter (name, value) VALUES ($1, $2) 
-			 ON CONFLICT (name) DO UPDATE SET value = $2`,
-			name, value)
-		if err != nil {
-			fmt.Printf("Failed to save counter %s: %v\n", name, err)
+	saveBatch := func(stmt *sql.Stmt, metrics map[string]interface{}) error {
+		for name, value := range metrics {
+			var err error
+			for attempt := 0; attempt <= maxRetries; attempt++ {
+				_, err = stmt.ExecContext(context.Background(), name, value)
+				if err == nil {
+					break
+				}
+
+				var pgErr *pgconn.PgError
+				if errors.As(err, &pgErr) {
+					if classifier.Classify(err) == pgerrors.Retriable {
+						if attempt < maxRetries {
+							time.Sleep(backoffDelays[attempt])
+							continue
+						}
+					}
+				}
+				return err
+			}
 		}
+		return nil
+	}
+
+	tx, err := ms.db.Begin()
+	if err != nil {
+		return
+	}
+	stmt_g, err := tx.PrepareContext(context.Background(), `INSERT INTO gauge (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`)
+	if err != nil {
+		return
+	}
+	defer stmt_g.Close()
+
+	err = saveBatch(stmt_g, func(m map[string]float64) map[string]interface{} {
+		result := make(map[string]interface{})
+		for k, v := range m {
+			result[k] = v
+		}
+		return result
+	}(gaugeMetrics),
+	)
+	if err != nil {
+		fmt.Printf("Failed to save gauge metrics after retries: %v\n", err)
+	}
+
+	stmt_c, err := tx.PrepareContext(context.Background(), `INSERT INTO counter (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`)
+	if err != nil {
+		return
+	}
+	defer stmt_c.Close()
+
+	err = saveBatch(stmt_c, func(m map[string]int64) map[string]interface{} {
+		result := make(map[string]interface{})
+		for k, v := range m {
+			result[k] = v
+		}
+		return result
+	}(counterMetrics),
+	)
+	if err != nil {
+		fmt.Printf("Failed to save counter metrics after retries: %v\n", err)
 	}
 }
 
