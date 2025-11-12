@@ -1,7 +1,9 @@
 package main
 
 import (
-	"flag"
+	"bytes"
+	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -11,12 +13,12 @@ import (
 
 var сlient = &http.Client{}
 
-// -a=localhost:8080 -r=10 (reportInterval) -p=2 (pollInterval)
-var (
-	sAddr     = flag.String("a", "localhost:8080", "address and port to run server")
-	pInterval = flag.Int("r", 10, "reportInterval set")
-	rInterval = flag.Int("p", 2, "pollInterval set")
-)
+type Metrics struct {
+	ID    string   `json:"id"`
+	MType string   `json:"type"`
+	Delta *int64   `json:"delta,omitempty"`
+	Value *float64 `json:"value,omitempty"`
+}
 
 type MetricStorage struct {
 	gauge   map[string]float64
@@ -55,6 +57,9 @@ var fieldMap = map[string]func(*runtime.MemStats) float64{
 	"StackInuse":    func(m *runtime.MemStats) float64 { return float64(m.StackInuse) },
 	"Sys":           func(m *runtime.MemStats) float64 { return float64(m.Sys) },
 	"TotalAlloc":    func(m *runtime.MemStats) float64 { return float64(m.TotalAlloc) },
+	"HeapInuse":     func(m *runtime.MemStats) float64 { return float64(m.HeapInuse) },
+	"MSpanInuse":    func(m *runtime.MemStats) float64 { return float64(m.MSpanInuse) },
+	"StackSys":      func(m *runtime.MemStats) float64 { return float64(m.StackSys) },
 }
 
 func (ms *MetricStorage) getMetrics(m *runtime.MemStats) {
@@ -87,8 +92,94 @@ func sendMetric(name, typeMetric string, value string, serverAddr string) error 
 	return nil
 }
 
+func sendMetricJSON(name, metricType string, serverAddr string, value *float64, delta *int64) error {
+	var b bytes.Buffer
+
+	metric := Metrics{
+		ID:    name,
+		MType: metricType,
+		Value: value,
+		Delta: delta,
+	}
+
+	body, err := json.Marshal(metric)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metric: %w", err)
+	}
+
+	gz := gzip.NewWriter(&b)
+	if _, err := gz.Write(body); err != nil {
+		gz.Close()
+		return fmt.Errorf("failed to compress body: %w", err)
+	}
+	if err := gz.Close(); err != nil {
+		return fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	url := fmt.Sprintf("http://%s/update", serverAddr)
+	req, err := http.NewRequest(http.MethodPost, url, &b)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+
+	resp, err := сlient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func sendBatchJSON(metricsList []Metrics, serverAddr string) error {
+	if len(metricsList) == 0 {
+		return nil
+	}
+
+	body, err := json.Marshal(metricsList)
+	if err != nil {
+		return fmt.Errorf("failed to marshal batch: %w", err)
+	}
+
+	var b bytes.Buffer
+	gz := gzip.NewWriter(&b)
+	if _, err := gz.Write(body); err != nil {
+		gz.Close()
+		return fmt.Errorf("failed to compress batch: %w", err)
+	}
+	if err := gz.Close(); err != nil {
+		return fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	url := fmt.Sprintf("http://%s/updates", serverAddr)
+	req, err := http.NewRequest(http.MethodPost, url, &b)
+	if err != nil {
+		return fmt.Errorf("failed to create batch request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+
+	resp, err := сlient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send batch: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status %d for batch", resp.StatusCode)
+	}
+	return nil
+}
+
 func main() {
-	flag.Parse()
+	parseArgs()
 	ms := createMetricStorage()
 
 	serverAddr := *sAddr
@@ -100,31 +191,47 @@ func main() {
 	lastReport := time.Now()
 
 	ms.getMetrics(&m)
+	useBatch := true
+
 	for {
 		time.Sleep(pollInterval)
 		runtime.ReadMemStats(&m)
 		ms.getMetrics(&m)
 
 		if time.Since(lastReport) >= reportInterval {
-			sent := 0
-			for name, value := range ms.gauge {
-				err := sendMetric(name, "gauge", fmt.Sprintf("%f", value), serverAddr)
+			var batch []Metrics
+			for name, v := range ms.gauge {
+				batch = append(batch, Metrics{ID: name, MType: "gauge", Value: &v})
+			}
+			for name, d := range ms.counter {
+				batch = append(batch, Metrics{ID: name, MType: "counter", Delta: &d})
+			}
+
+			var err error
+			if useBatch {
+				err = sendBatchJSON(batch, serverAddr)
 				if err != nil {
-					fmt.Printf("error send gauge %v", err)
-				} else {
-					sent++
+					fmt.Println("New API /updates/ not available, falling back to old API")
+					useBatch = false
+					for _, m := range batch {
+						if m.MType == "gauge" {
+							sendMetricJSON(m.ID, m.MType, serverAddr, m.Value, nil)
+						} else {
+							sendMetricJSON(m.ID, m.MType, serverAddr, nil, m.Delta)
+						}
+					}
+				}
+			} else {
+				for _, m := range batch {
+					if m.MType == "gauge" {
+						sendMetricJSON(m.ID, m.MType, serverAddr, m.Value, nil)
+					} else {
+						sendMetricJSON(m.ID, m.MType, serverAddr, nil, m.Delta)
+					}
 				}
 			}
-			for name, value := range ms.counter {
-				err := sendMetric(name, "counter", fmt.Sprintf("%d", value), serverAddr)
-				if err != nil {
-					fmt.Printf("error send counter %v", err)
-				} else {
-					sent++
-				}
-			}
+
 			lastReport = time.Now()
 		}
 	}
-
 }
