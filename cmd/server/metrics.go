@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -147,16 +148,15 @@ func (ms *MetricStorage) saveToDB() {
 		counterMetrics[k] = v
 	}
 
-	saveBatch := func(query string, metrics map[string]interface{}) error {
+	saveBatch := func(stmt *sql.Stmt, metrics map[string]interface{}) error {
 		for name, value := range metrics {
 			var err error
 			for attempt := 0; attempt <= maxRetries; attempt++ {
-				_, err = ms.db.ExecContext(context.Background(), query, name, value)
+				_, err = stmt.ExecContext(context.Background(), name, value)
 				if err == nil {
-					break // успех — выходим
+					break
 				}
 
-				// Проверяем, является ли ошибка повторяемой
 				var pgErr *pgconn.PgError
 				if errors.As(err, &pgErr) {
 					if classifier.Classify(err) == pgerrors.Retriable {
@@ -172,28 +172,41 @@ func (ms *MetricStorage) saveToDB() {
 		return nil
 	}
 
-	err := saveBatch(
-		`INSERT INTO gauge (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`,
-		func(m map[string]float64) map[string]interface{} {
-			result := make(map[string]interface{})
-			for k, v := range m {
-				result[k] = v
-			}
-			return result
-		}(gaugeMetrics),
+	tx, err := ms.db.Begin()
+	if err != nil {
+		return
+	}
+	stmtG, err := tx.PrepareContext(context.Background(), `INSERT INTO gauge (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`)
+	if err != nil {
+		return
+	}
+	defer stmtG.Close()
+
+	err = saveBatch(stmtG, func(m map[string]float64) map[string]interface{} {
+		result := make(map[string]interface{})
+		for k, v := range m {
+			result[k] = v
+		}
+		return result
+	}(gaugeMetrics),
 	)
 	if err != nil {
 		fmt.Printf("Failed to save gauge metrics after retries: %v\n", err)
 	}
-	err = saveBatch(
-		`INSERT INTO counter (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`,
-		func(m map[string]int64) map[string]interface{} {
-			result := make(map[string]interface{})
-			for k, v := range m {
-				result[k] = v
-			}
-			return result
-		}(counterMetrics),
+
+	stmtC, err := tx.PrepareContext(context.Background(), `INSERT INTO counter (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`)
+	if err != nil {
+		return
+	}
+	defer stmtC.Close()
+
+	err = saveBatch(stmtC, func(m map[string]int64) map[string]interface{} {
+		result := make(map[string]interface{})
+		for k, v := range m {
+			result[k] = v
+		}
+		return result
+	}(counterMetrics),
 	)
 	if err != nil {
 		fmt.Printf("Failed to save counter metrics after retries: %v\n", err)
