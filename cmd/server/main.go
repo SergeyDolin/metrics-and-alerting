@@ -47,6 +47,7 @@ func main() {
 			dbStorage.Close()
 		}()
 		store = dbStorage
+		saveSync = func() {}
 	} else {
 		if flagFileStoragePath != "" && flagRestore {
 			fileStorage, err := storage.NewFileStorage(flagFileStoragePath)
