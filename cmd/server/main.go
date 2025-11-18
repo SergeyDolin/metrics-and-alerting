@@ -1,8 +1,6 @@
 package main
 
 import (
-	"context"
-	"database/sql"
 	"net/http"
 	"time"
 
@@ -26,79 +24,63 @@ func main() {
 
 	logger, err := zap.NewDevelopment()
 	if err != nil {
-		panic("cannot initialize zap")
+		logger.Fatal("cannot initialize zap")
 	}
 	defer logger.Sync()
 	sugar := logger.Sugar()
 
 	router := chi.NewRouter()
-	var ms *MetricStorage
+	var store storage.Storage
 	var saveSync func()
 
 	if flagSQL != "" {
 		sugar.Infof("Initializing PostgreSQL storage with DSN: %s", flagSQL)
 
-		db, err := sql.Open("pgx", flagSQL)
+		dbStorage, err := storage.NewDBStorage(flagSQL)
 		if err != nil {
 			sugar.Fatalf("Failed to open DB connection: %v", err)
 		}
-		defer db.Close()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err = db.PingContext(ctx)
-		cancel()
-		if err != nil {
-			sugar.Fatalf("Failed to ping DB: %v", err)
-		}
-
-		if err := storage.RunMigrations(db); err != nil {
-			sugar.Fatalf("Migrations failed: %v", err)
-		}
-
-		ms = &MetricStorage{
-			gauge:   make(map[string]float64),
-			counter: make(map[string]int64),
-			db:      db,
-		}
-
-		if err := ms.loadFromDB(); err != nil {
-			sugar.Warnf("Failed to load metrics from DB: %v", err)
-		}
-
-		saveSync = func() {
-			ms.saveToDB()
-		}
-
+		defer func() {
+			if err := dbStorage.SaveAll(); err != nil {
+				sugar.Errorf("Failed to save metrics on exit: %v", err)
+			}
+			dbStorage.Close()
+		}()
+		store = dbStorage
 	} else {
-		ms = &MetricStorage{
-			gauge:   make(map[string]float64),
-			counter: make(map[string]int64),
-		}
-
 		if flagFileStoragePath != "" && flagRestore {
-			if err := ms.LoadFromFile(flagFileStoragePath); err != nil {
+			fileStorage, err := storage.NewFileStorage(flagFileStoragePath)
+			if err != nil {
 				sugar.Warnf("Failed to restore metrics from file: %v", err)
+			} else {
+				store = fileStorage
 			}
 		}
-
+		if store == nil {
+			store = storage.NewMemStorage()
+		}
 		// Фоновое сохранение
 		if flagStoreInterval > 0 && flagFileStoragePath != "" {
-			go func() {
-				ticker := time.NewTicker(flagStoreInterval)
-				defer ticker.Stop()
-				for range ticker.C {
-					if err := ms.SaveToFile(flagFileStoragePath); err != nil {
-						sugar.Errorf("Periodic save failed: %v", err)
+			if fs, ok := store.(*storage.FileStorage); ok {
+				go func() {
+					ticker := time.NewTicker(flagStoreInterval)
+					defer ticker.Stop()
+					for range ticker.C {
+						if err := fs.Save(); err != nil {
+							sugar.Errorf("Periodic save failed: %v", err)
+						}
 					}
-				}
-			}()
+				}()
+			}
 		}
 
 		// Обёртка сохранения для файла/памяти
 		saveSync = func() {
 			if flagStoreInterval == 0 && flagFileStoragePath != "" {
-				if err := ms.SaveToFile(flagFileStoragePath); err != nil {
-					sugar.Errorf("Sync save failed: %v", err)
+				if fs, ok := store.(*storage.FileStorage); ok {
+					if err := fs.Save(); err != nil {
+						sugar.Errorf("Sync save failed: %v", err)
+					}
 				}
 			}
 		}
@@ -115,13 +97,13 @@ func main() {
 		http.Error(w, "Invalid path format", http.StatusNotFound)
 	})
 
-	router.Get("/", indexHandler(ms))
-	router.Post("/update", updateJSONHandler(ms, saveSync))
-	router.Post("/updates", updatesBatchHandler(ms, saveSync))
-	router.Get("/ping", pingSQLHandler(flagSQL))
-	router.Post("/value", valueJSONHandler(ms))
-	router.Post("/update/{type}/{name}/{value}", postHandler(ms, saveSync))
-	router.Get("/value/{type}/{name}", getHandler(ms))
+	router.Get("/", indexHandler(store))
+	router.Post("/update", updateJSONHandler(store, saveSync))
+	router.Post("/updates", updatesBatchHandler(store, saveSync))
+	router.Get("/ping", pingSQLHandler(store))
+	router.Post("/value", valueJSONHandler(store))
+	router.Post("/update/{type}/{name}/{value}", postHandler(store, saveSync))
+	router.Get("/value/{type}/{name}", getHandler(store))
 
 	sugar.Infof("Running server on %s", flagRunAddr)
 	sugar.Fatal(http.ListenAndServe(flagRunAddr, router))
