@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,9 +9,12 @@ import (
 	"strconv"
 	"strings"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
+
 	"github.com/go-chi/chi"
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
+	"github.com/SergeyDolin/metrics-and-alerting/internal/storage"
 )
 
 type MetricType string
@@ -23,34 +27,37 @@ const (
 // indexHandler — возвращает HTTP-обработчик, который выводит все метрики (gauge и counter) в виде строки.
 // Формат: "metric1=value1, metric2=value2, ..."
 // Поддерживает только GET-запросы. При других методах возвращает ошибку 405.
-func indexHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
+func indexHandler(store storage.Storage) func(http.ResponseWriter, *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodGet {
 			http.Error(res, "Only GET request allowed!", http.StatusMethodNotAllowed)
 			return
 		}
-		ms.mu.Lock()
-		defer ms.mu.Unlock()
+		metrics, err := store.GetAll()
+		if err != nil {
+			http.Error(res, "Failed to fetch metrics", http.StatusInternalServerError)
+			return
+		}
 
 		res.Header().Set("Content-Type", "text/html; charset=utf-8")
 
 		html := `<!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Metrics</title>
-</head>
-<body>
-    <h1>Metrics</h1>
-    <ul>`
-		for name, value := range ms.gauge {
-			html += fmt.Sprintf("<li><strong>%s</strong>: %v (gauge)</li>", name, value)
-		}
-		for name, value := range ms.counter {
-			html += fmt.Sprintf("<li><strong>%s</strong>: %v (counter)</li>", name, value)
+<head><meta charset="UTF-8"><title>Metrics</title></head>
+<body><h1>Metrics</h1><ul>`
+		for _, m := range metrics {
+			switch m.MType {
+			case "gauge":
+				if m.Value != nil {
+					html += fmt.Sprintf("<li><strong>%s</strong>: %v (gauge)</li>", m.ID, *m.Value)
+				}
+			case "counter":
+				if m.Delta != nil {
+					html += fmt.Sprintf("<li><strong>%s</strong>: %v (counter)</li>", m.ID, *m.Delta)
+				}
+			}
 		}
 		html += `</ul></body></html>`
-
 		io.WriteString(res, html)
 	}
 }
@@ -59,7 +66,7 @@ func indexHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 // URL: /value/{type}/{name}
 // Поддерживает только GET. Возвращает значение метрики или ошибку 404, если метрика не найдена.
 // Типы: "gauge" или "counter". Регистр не важен.
-func getHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
+func getHandler(store storage.Storage) func(http.ResponseWriter, *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodGet {
 			http.Error(res, "Only GET request allowed!", http.StatusMethodNotAllowed)
@@ -69,12 +76,9 @@ func getHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 		metricType := strings.ToLower(chi.URLParam(req, "type"))
 		metricName := chi.URLParam(req, "name")
 
-		ms.mu.Lock()
-		defer ms.mu.Unlock()
-
 		switch metricType {
 		case "gauge":
-			if value, exists := ms.gauge[metricName]; exists {
+			if value, exists := store.GetGauge(metricName); exists {
 				io.WriteString(res, fmt.Sprintf("%v", value))
 				return
 			}
@@ -82,7 +86,7 @@ func getHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 			return
 
 		case "counter":
-			if value, exists := ms.counter[metricName]; exists {
+			if value, exists := store.GetCounter(metricName); exists {
 				io.WriteString(res, fmt.Sprintf("%v", value))
 				return
 			}
@@ -102,7 +106,7 @@ func getHandler(ms *MetricStorage) func(http.ResponseWriter, *http.Request) {
 // - gauge: требует float64
 // - counter: требует int64
 // При успехе возвращает 200 OK, при ошибках — соответствующие HTTP-ошибки.
-func metricHandler(ms *MetricStorage, metricType MetricType, parser func(string) (interface{}, error), updateFunc func(string, interface{})) http.HandlerFunc {
+func metricHandler(metricType MetricType, parser func(string) (interface{}, error), updateFunc func(string, interface{})) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
 			http.Error(res, "Only POST request allowed!", http.StatusMethodNotAllowed)
@@ -137,135 +141,90 @@ func metricHandler(ms *MetricStorage, metricType MetricType, parser func(string)
 	}
 }
 
-func postHandler(ms *MetricStorage, saveFunc func()) http.HandlerFunc {
-	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
-		typeOfMetric := strings.ToLower(chi.URLParam(req, "type"))
-
-		switch MetricType(typeOfMetric) {
-		case MetricTypeGauge:
-			metricHandler(ms, MetricTypeGauge,
-				func(s string) (interface{}, error) {
-					return strconv.ParseFloat(s, 64)
-				},
-				func(name string, i interface{}) {
-					ms.updateGauge(name, i.(float64))
-					saveFunc()
-				},
-			)(res, req)
-
-		case MetricTypeCounter:
-			metricHandler(ms, MetricTypeCounter,
-				func(s string) (interface{}, error) {
-					return strconv.ParseInt(s, 10, 64)
-				},
-				func(name string, i interface{}) {
-					ms.updateCounter(name, i.(int64))
-					saveFunc()
-				},
-			)(res, req)
-
-		default:
-			http.Error(res, "Unknown metric type", http.StatusBadRequest)
-		}
-	})
-}
-
-func updateJSONHandler(ms *MetricStorage, saveFunc func()) http.HandlerFunc {
+func postHandler(store storage.Storage, saveFunc func()) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
-		var msJSON metrics.Metrics
-
-		if err := json.NewDecoder(req.Body).Decode(&msJSON); err != nil {
-			http.Error(res, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+		if req.Method != http.MethodPost {
+			http.Error(res, "Only POST request allowed!", http.StatusMethodNotAllowed)
 			return
 		}
 
-		if msJSON.ID == "" {
-			http.Error(res, "Missing metric ID", http.StatusBadRequest)
-			return
-		}
+		metricType := strings.ToLower(chi.URLParam(req, "type"))
+		name := chi.URLParam(req, "name")
+		valueStr := chi.URLParam(req, "value")
 
-		switch MetricType(msJSON.MType) {
-		case MetricTypeGauge:
-			if msJSON.Value == nil {
-				http.Error(res, "Missing 'value' for gauge metric", http.StatusBadRequest)
+		var err error
+		switch metricType {
+		case "gauge":
+			var v float64
+			if v, err = strconv.ParseFloat(valueStr, 64); err != nil {
+				http.Error(res, "Only Float type for Gauge allowed!", http.StatusBadRequest)
 				return
 			}
-			if msJSON.Delta != nil {
-				http.Error(res, "Unexpected 'delta' for gauge metric", http.StatusBadRequest)
+			if err = store.UpdateGauge(name, v); err != nil {
+				http.Error(res, "Failed to update metric", http.StatusInternalServerError)
 				return
 			}
-			ms.updateGauge(msJSON.ID, *msJSON.Value)
-			saveFunc()
 
-		case MetricTypeCounter:
-			if msJSON.Delta == nil {
-				http.Error(res, "Missing 'delta' for counter metric", http.StatusBadRequest)
+		case "counter":
+			var d int64
+			if d, err = strconv.ParseInt(valueStr, 10, 64); err != nil {
+				http.Error(res, "Only Int type for Counter allowed!", http.StatusBadRequest)
 				return
 			}
-			if msJSON.Value != nil {
-				http.Error(res, "Unexpected 'value' for counter metric", http.StatusBadRequest)
+			if err = store.UpdateCounter(name, d); err != nil {
+				http.Error(res, "Failed to update metric", http.StatusInternalServerError)
 				return
 			}
-			ms.updateCounter(msJSON.ID, *msJSON.Delta)
-			saveFunc()
 
 		default:
 			http.Error(res, "Unknown metric type", http.StatusBadRequest)
 			return
 		}
 
-		res.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(res).Encode(msJSON); err != nil {
-			http.Error(res, "Bad encode", http.StatusBadRequest)
-			return
-		}
+		saveFunc()
+		res.WriteHeader(http.StatusOK)
 	}
 }
 
-func valueJSONHandler(ms *MetricStorage) http.HandlerFunc {
+func updateJSONHandler(store storage.Storage, saveFunc func()) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
-		var reqMetric metrics.Metrics
-
-		res.Header().Set("Content-Type", "application/json")
-
-		if err := json.NewDecoder(req.Body).Decode(&reqMetric); err != nil {
-			http.Error(res, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+		var m metrics.Metrics
+		if err := json.NewDecoder(req.Body).Decode(&m); err != nil {
+			http.Error(res, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
 
-		if reqMetric.ID == "" {
+		if m.ID == "" {
 			http.Error(res, "Missing metric ID", http.StatusBadRequest)
 			return
 		}
-		if reqMetric.MType == "" {
-			http.Error(res, "Missing metric type", http.StatusBadRequest)
-			return
-		}
 
-		switch MetricType(reqMetric.MType) {
-		case MetricTypeGauge:
-			if value, ok := ms.gauge[reqMetric.ID]; ok {
-				respMetric := metrics.Metrics{
-					ID:    reqMetric.ID,
-					MType: "gauge",
-					Value: &value,
-				}
-				if err := json.NewEncoder(res).Encode(respMetric); err != nil {
-					http.Error(res, "Failed to encode response", http.StatusInternalServerError)
-				}
+		switch m.MType {
+		case "gauge":
+			if m.Value == nil {
+				http.Error(res, "Missing 'value' for gauge metric", http.StatusBadRequest)
+				return
+			}
+			if m.Delta != nil {
+				http.Error(res, "Unexpected 'delta' for gauge metric", http.StatusBadRequest)
+				return
+			}
+			if err := store.UpdateGauge(m.ID, *m.Value); err != nil {
+				http.Error(res, "Storage error", http.StatusInternalServerError)
 				return
 			}
 
-		case MetricTypeCounter:
-			if delta, ok := ms.counter[reqMetric.ID]; ok {
-				respMetric := metrics.Metrics{
-					ID:    reqMetric.ID,
-					MType: "counter",
-					Delta: &delta,
-				}
-				if err := json.NewEncoder(res).Encode(respMetric); err != nil {
-					http.Error(res, "Failed to encode response", http.StatusInternalServerError)
-				}
+		case "counter":
+			if m.Delta == nil {
+				http.Error(res, "Missing 'delta' for counter metric", http.StatusBadRequest)
+				return
+			}
+			if m.Value != nil {
+				http.Error(res, "Unexpected 'value' for counter metric", http.StatusBadRequest)
+				return
+			}
+			if err := store.UpdateCounter(m.ID, *m.Delta); err != nil {
+				http.Error(res, "Storage error", http.StatusInternalServerError)
 				return
 			}
 
@@ -274,6 +233,128 @@ func valueJSONHandler(ms *MetricStorage) http.HandlerFunc {
 			return
 		}
 
-		http.Error(res, "Metric not found", http.StatusNotFound)
+		saveFunc()
+		res.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(res).Encode(m)
+	}
+}
+
+func valueJSONHandler(store storage.Storage) http.HandlerFunc {
+	return func(res http.ResponseWriter, req *http.Request) {
+		var r metrics.Metrics
+		if err := json.NewDecoder(req.Body).Decode(&r); err != nil {
+			http.Error(res, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		if r.ID == "" || r.MType == "" {
+			http.Error(res, "Missing ID or type", http.StatusBadRequest)
+			return
+		}
+
+		var resp metrics.Metrics
+		found := false
+
+		switch r.MType {
+		case "gauge":
+			if v, ok := store.GetGauge(r.ID); ok {
+				resp = metrics.Metrics{ID: r.ID, MType: "gauge", Value: &v}
+				found = true
+			}
+		case "counter":
+			if d, ok := store.GetCounter(r.ID); ok {
+				resp = metrics.Metrics{ID: r.ID, MType: "counter", Delta: &d}
+				found = true
+			}
+		default:
+			http.Error(res, "Unknown metric type", http.StatusBadRequest)
+			return
+		}
+
+		if !found {
+			http.Error(res, "Metric not found", http.StatusNotFound)
+			return
+		}
+
+		res.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(res).Encode(resp)
+	}
+}
+
+func pingSQLHandler(store storage.Storage) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if dbStore, ok := store.(*storage.DBStorage); ok {
+			if err := dbStore.Ping(context.Background()); err != nil {
+				http.Error(w, "Couldn't connect to the database: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			http.Error(w, "DATABASE_DSN is not configured", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func updatesBatchHandler(store storage.Storage, saveFunc func()) http.HandlerFunc {
+	return func(res http.ResponseWriter, req *http.Request) {
+		var batch []metrics.Metrics
+		if err := json.NewDecoder(req.Body).Decode(&batch); err != nil {
+			http.Error(res, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		if len(batch) == 0 {
+			http.Error(res, "Empty batch not allowed", http.StatusBadRequest)
+			return
+		}
+
+		for _, m := range batch {
+			if m.ID == "" {
+				http.Error(res, "Missing metric ID in batch", http.StatusBadRequest)
+				return
+			}
+			switch m.MType {
+			case "gauge":
+				if m.Value == nil {
+					http.Error(res, fmt.Sprintf("Missing 'value' for gauge metric %s", m.ID), http.StatusBadRequest)
+					return
+				}
+				if m.Delta != nil {
+					http.Error(res, fmt.Sprintf("Unexpected 'delta' for gauge metric %s", m.ID), http.StatusBadRequest)
+					return
+				}
+			case "counter":
+				if m.Delta == nil {
+					http.Error(res, fmt.Sprintf("Missing 'delta' for counter metric %s", m.ID), http.StatusBadRequest)
+					return
+				}
+				if m.Value != nil {
+					http.Error(res, fmt.Sprintf("Unexpected 'value' for counter metric %s", m.ID), http.StatusBadRequest)
+					return
+				}
+			default:
+				http.Error(res, fmt.Sprintf("Unknown metric type for %s", m.ID), http.StatusBadRequest)
+				return
+			}
+		}
+
+		for _, m := range batch {
+			var err error
+			switch m.MType {
+			case "gauge":
+				err = store.UpdateGauge(m.ID, *m.Value)
+			case "counter":
+				err = store.UpdateCounter(m.ID, *m.Delta)
+			}
+			if err != nil {
+				http.Error(res, "Storage error during batch update", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		saveFunc()
+		res.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(res).Encode(batch)
 	}
 }

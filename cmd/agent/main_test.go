@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -33,7 +34,8 @@ func Test_sendMetric(t *testing.T) {
 	}))
 	defer server.Close()
 
-	serverAddr := server.Listener.Addr().String()
+	client := &http.Client{Timeout: 5 * time.Second}
+	serverAddr := strings.TrimPrefix(server.URL, "http://")
 
 	tests := []struct {
 		name       string
@@ -71,7 +73,7 @@ func Test_sendMetric(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := sendMetric(tt.metricName, tt.typeMetric, tt.value, tt.serverAddr)
+			err := sendMetric(client, tt.metricName, tt.typeMetric, tt.value, tt.serverAddr)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -101,6 +103,7 @@ func Test_sendMetricJSON(t *testing.T) {
 	}))
 	defer errServer.Close()
 
+	client := &http.Client{Timeout: 5 * time.Second}
 	okAddr := strings.TrimPrefix(okServer.URL, "http://")
 	errAddr := strings.TrimPrefix(errServer.URL, "http://")
 
@@ -153,7 +156,7 @@ func Test_sendMetricJSON(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := sendMetricJSON(tt.metricName, tt.metricType, tt.serverAddr, tt.value, tt.delta)
+			err := sendMetricJSON(client, tt.metricName, tt.metricType, tt.serverAddr, tt.value, tt.delta)
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -174,13 +177,14 @@ func Test_sendMetricJSON_GzipCompression(t *testing.T) {
 	}))
 	defer server.Close()
 
+	client := &http.Client{Timeout: 5 * time.Second}
 	serverAddr := strings.TrimPrefix(server.URL, "http://")
 
 	metricName := "TestGauge"
 	metricType := "gauge"
 	value := 42.0
 
-	err := sendMetricJSON(metricName, metricType, serverAddr, &value, nil)
+	err := sendMetricJSON(client, metricName, metricType, serverAddr, &value, nil)
 	assert.NoError(t, err)
 
 	assert.Equal(t, "gzip", contentEncoding)
@@ -198,4 +202,74 @@ func Test_sendMetricJSON_GzipCompression(t *testing.T) {
 	assert.Equal(t, metricName, metric.ID)
 	assert.Equal(t, metricType, metric.MType)
 	assert.Equal(t, value, *metric.Value)
+}
+
+func Test_sendBatchJSON_Success(t *testing.T) {
+	var receivedMetrics []Metrics
+	var contentEncoding string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/updates", r.URL.Path)
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		contentEncoding = r.Header.Get("Content-Encoding")
+
+		gz, err := gzip.NewReader(r.Body)
+		assert.NoError(t, err)
+		defer gz.Close()
+
+		body, err := io.ReadAll(gz)
+		assert.NoError(t, err)
+
+		err = json.Unmarshal(body, &receivedMetrics)
+		assert.NoError(t, err)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(receivedMetrics)
+	}))
+	defer server.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	serverAddr := strings.TrimPrefix(server.URL, "http://")
+
+	batch := []Metrics{
+		{ID: "Gauge1", MType: "gauge", Value: func(v float64) *float64 { return &v }(1.1)},
+		{ID: "Counter1", MType: "counter", Delta: func(v int64) *int64 { return &v }(2)},
+	}
+
+	err := sendBatchJSON(client, batch, serverAddr)
+	assert.NoError(t, err)
+	assert.Equal(t, "gzip", contentEncoding)
+	assert.Len(t, receivedMetrics, 2)
+
+	gotGauge := false
+	gotCounter := false
+	for _, m := range receivedMetrics {
+		if m.ID == "Gauge1" && m.MType == "gauge" && *m.Value == 1.1 {
+			gotGauge = true
+		}
+		if m.ID == "Counter1" && m.MType == "counter" && *m.Delta == 2 {
+			gotCounter = true
+		}
+	}
+	assert.True(t, gotGauge)
+	assert.True(t, gotCounter)
+}
+
+func Test_sendBatchJSON_EmptyBatch(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	serverAddr := strings.TrimPrefix(server.URL, "http://")
+
+	// Пустой срез
+	err := sendBatchJSON(client, []Metrics{}, serverAddr)
+	assert.NoError(t, err)
+	assert.False(t, called, "Server should not be called for empty batch")
 }

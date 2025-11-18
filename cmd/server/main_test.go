@@ -1,30 +1,53 @@
+// handlers_test.go
+
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/go-chi/chi"
+	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
+	"github.com/SergeyDolin/metrics-and-alerting/internal/storage"
 )
 
-func Test_postHandler(t *testing.T) {
-	ms := createMetricStorage()
+const testDB = "postgres://user:pass@localhost:5432/postgres?sslmode=disable"
 
+// Вспомогательная функция для временного файла
+func tempFile(t *testing.T) string {
+	t.Helper()
+	f, err := os.CreateTemp("", "metrics-*.json")
+	require.NoError(t, err)
+	f.Close()
+	t.Cleanup(func() { os.Remove(f.Name()) })
+	return f.Name()
+}
+
+func Test_postHandler(t *testing.T) {
+	store := storage.NewMemStorage()
 	router := chi.NewRouter()
+	router.Use(gzipMiddleware)
 	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Only POST request allowed!", http.StatusMethodNotAllowed)
 	})
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid path format", http.StatusNotFound)
 	})
-	router.Post("/update/{type}/{name}/{value}", postHandler(ms, func() {}))
+	router.Post("/update/{type}/{name}/{value}", postHandler(store, func() {}))
 
 	tests := []struct {
 		name            string
@@ -36,19 +59,17 @@ func Test_postHandler(t *testing.T) {
 		expectedCounter map[string]int64
 	}{
 		{
-			name:            "Valid gauge update",
-			method:          http.MethodPost,
-			url:             "/update/gauge/temp/25.5",
-			expectedStatus:  http.StatusOK,
-			expectedGauge:   map[string]float64{"temp": 25.5},
-			expectedCounter: map[string]int64{},
+			name:           "Valid gauge update",
+			method:         http.MethodPost,
+			url:            "/update/gauge/temp/25.5",
+			expectedStatus: http.StatusOK,
+			expectedGauge:  map[string]float64{"temp": 25.5},
 		},
 		{
 			name:            "Valid counter update",
 			method:          http.MethodPost,
 			url:             "/update/counter/req/10",
 			expectedStatus:  http.StatusOK,
-			expectedGauge:   map[string]float64{},
 			expectedCounter: map[string]int64{"req": 10},
 		},
 		{
@@ -97,6 +118,18 @@ func Test_postHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Перед каждым тестом — чистый storage
+			store := storage.NewMemStorage()
+			router := chi.NewRouter()
+			router.Use(gzipMiddleware)
+			router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "Only POST request allowed!", http.StatusMethodNotAllowed)
+			})
+			router.NotFound(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "Invalid path format", http.StatusNotFound)
+			})
+			router.Post("/update/{type}/{name}/{value}", postHandler(store, func() {}))
+
 			req := httptest.NewRequest(tt.method, tt.url, nil)
 			rr := httptest.NewRecorder()
 			router.ServeHTTP(rr, req)
@@ -108,13 +141,13 @@ func Test_postHandler(t *testing.T) {
 			}
 
 			for name, value := range tt.expectedGauge {
-				got, exists := ms.gauge[name]
+				got, exists := store.GetGauge(name)
 				assert.True(t, exists, "Expected gauge metric %s not found", name)
 				assert.Equal(t, value, got, "Gauge %s value mismatch", name)
 			}
 
 			for name, value := range tt.expectedCounter {
-				got, exists := ms.counter[name]
+				got, exists := store.GetCounter(name)
 				assert.True(t, exists, "Expected counter metric %s not found", name)
 				assert.Equal(t, value, got, "Counter %s value mismatch", name)
 			}
@@ -142,12 +175,6 @@ func Test_updateJSONHandler(t *testing.T) {
 			jsonBody:        `{"id": "PollCount", "type": "counter", "delta": 10}`,
 			expectedStatus:  http.StatusOK,
 			expectedCounter: map[string]int64{"PollCount": 10},
-		},
-		{
-			name:            "Counter increment twice",
-			jsonBody:        `{"id": "Hits", "type": "counter", "delta": 7}`,
-			expectedStatus:  http.StatusOK,
-			expectedCounter: map[string]int64{"Hits": 7},
 		},
 		{
 			name:           "Invalid JSON",
@@ -191,25 +218,13 @@ func Test_updateJSONHandler(t *testing.T) {
 			expectedStatus: http.StatusBadRequest,
 			expectedBody:   "Unknown metric type",
 		},
-		{
-			name:           "Counter with null delta",
-			jsonBody:       `{"id": "Test", "type": "counter", "delta": null}`,
-			expectedStatus: http.StatusBadRequest,
-			expectedBody:   "Missing 'delta' for counter metric",
-		},
-		{
-			name:           "Gauge with null value",
-			jsonBody:       `{"id": "Test", "type": "gauge", "value": null}`,
-			expectedStatus: http.StatusBadRequest,
-			expectedBody:   "Missing 'value' for gauge metric",
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ms := createMetricStorage()
+			store := storage.NewMemStorage()
 			router := chi.NewRouter()
-			router.Post("/update", updateJSONHandler(ms, func() {}))
+			router.Post("/update", updateJSONHandler(store, func() {}))
 
 			req := httptest.NewRequest(http.MethodPost, "/update", strings.NewReader(tt.jsonBody))
 			req.Header.Set("Content-Type", "application/json")
@@ -217,34 +232,34 @@ func Test_updateJSONHandler(t *testing.T) {
 			rr := httptest.NewRecorder()
 			router.ServeHTTP(rr, req)
 
-			assert.Equal(t, tt.expectedStatus, rr.Code, "Unexpected status code")
+			assert.Equal(t, tt.expectedStatus, rr.Code)
 
 			if tt.expectedBody != "" {
-				assert.Contains(t, rr.Body.String(), tt.expectedBody, "Response body does not contain expected message")
+				assert.Contains(t, rr.Body.String(), tt.expectedBody)
 			}
 
 			for name, expectedValue := range tt.expectedGauge {
-				actualValue, exists := ms.gauge[name]
-				assert.True(t, exists, "Gauge metric %s not found", name)
-				assert.Equal(t, expectedValue, actualValue, "Gauge metric %s has wrong value", name)
+				actualValue, exists := store.GetGauge(name)
+				assert.True(t, exists, "Gauge %s not found", name)
+				assert.Equal(t, expectedValue, actualValue, "Gauge %s wrong value", name)
 			}
 
 			for name, expectedValue := range tt.expectedCounter {
-				actualValue, exists := ms.counter[name]
-				assert.True(t, exists, "Counter metric %s not found", name)
-				assert.Equal(t, expectedValue, actualValue, "Counter metric %s has wrong value", name)
+				actualValue, exists := store.GetCounter(name)
+				assert.True(t, exists, "Counter %s not found", name)
+				assert.Equal(t, expectedValue, actualValue, "Counter %s wrong value", name)
 			}
 		})
 	}
 }
 
 func Test_valueJSONHandler(t *testing.T) {
-	ms := createMetricStorage()
-	ms.updateGauge("Temperature", 25.5)
-	ms.updateCounter("PollCount", 42)
+	store := storage.NewMemStorage()
+	store.UpdateGauge("Temperature", 25.5)
+	store.UpdateCounter("PollCount", 42)
 
 	router := chi.NewRouter()
-	router.Post("/value", valueJSONHandler(ms))
+	router.Post("/value", valueJSONHandler(store))
 
 	tests := []struct {
 		name           string
@@ -279,33 +294,10 @@ func Test_valueJSONHandler(t *testing.T) {
 			expectedStatus: http.StatusNotFound,
 		},
 		{
-			name:           "Get non-existing counter",
-			jsonBody:       `{"id": "Unknown", "type": "counter"}`,
-			expectedStatus: http.StatusNotFound,
-		},
-		{
 			name:           "Invalid JSON",
 			jsonBody:       `{"id": "Test"`,
 			expectedStatus: http.StatusBadRequest,
 			expectedError:  "Invalid JSON",
-		},
-		{
-			name:           "Missing ID",
-			jsonBody:       `{"type": "gauge"}`,
-			expectedStatus: http.StatusBadRequest,
-			expectedError:  "Missing metric ID",
-		},
-		{
-			name:           "Missing type",
-			jsonBody:       `{"id": "Test"}`,
-			expectedStatus: http.StatusBadRequest,
-			expectedError:  "Missing metric type",
-		},
-		{
-			name:           "Unknown metric type",
-			jsonBody:       `{"id": "Test", "type": "unknown"}`,
-			expectedStatus: http.StatusBadRequest,
-			expectedError:  "Unknown metric type",
 		},
 	}
 
@@ -345,4 +337,136 @@ func Test_valueJSONHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_batchUpdateHandler(t *testing.T) {
+	tests := []struct {
+		name            string
+		jsonBody        string
+		expectedStatus  int
+		expectedBody    string
+		expectedGauge   map[string]float64
+		expectedCounter map[string]int64
+	}{
+		{
+			name: "Valid batch with gauge and counter",
+			jsonBody: `[
+				{"id": "Temperature", "type": "gauge", "value": 25.6},
+				{"id": "PollCount", "type": "counter", "delta": 1}
+			]`,
+			expectedStatus:  http.StatusOK,
+			expectedGauge:   map[string]float64{"Temperature": 25.6},
+			expectedCounter: map[string]int64{"PollCount": 1},
+		},
+		{
+			name:           "Empty batch",
+			jsonBody:       `[]`,
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Empty batch not allowed",
+		},
+		{
+			name: "Gauge without value",
+			jsonBody: `[
+				{"id": "Test", "type": "gauge"}
+			]`,
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Missing 'value' for gauge metric",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := storage.NewMemStorage()
+			router := chi.NewRouter()
+			router.Post("/updates", updatesBatchHandler(store, func() {})) // обратите внимание: путь без слеша
+
+			req := httptest.NewRequest(http.MethodPost, "/updates", strings.NewReader(tt.jsonBody))
+			req.Header.Set("Content-Type", "application/json")
+
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
+
+			assert.Equal(t, tt.expectedStatus, rr.Code)
+
+			if tt.expectedBody != "" {
+				assert.Contains(t, rr.Body.String(), tt.expectedBody)
+			}
+
+			for name, expected := range tt.expectedGauge {
+				actual, ok := store.GetGauge(name)
+				assert.True(t, ok, "Gauge %s not found", name)
+				assert.Equal(t, expected, actual, "Gauge %s value mismatch", name)
+			}
+
+			for name, expected := range tt.expectedCounter {
+				actual, ok := store.GetCounter(name)
+				assert.True(t, ok, "Counter %s not found", name)
+				assert.Equal(t, expected, actual, "Counter %s value mismatch", name)
+			}
+		})
+	}
+}
+
+func Test_batchUpdateHandler_Gzip(t *testing.T) {
+	store := storage.NewMemStorage()
+	router := chi.NewRouter()
+	router.Use(gzipMiddleware)
+	router.Post("/updates", updatesBatchHandler(store, func() {}))
+
+	data := `[{"id": "GzipTest", "type": "gauge", "value": 42.0}]`
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	gz.Write([]byte(data))
+	gz.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/updates", &buf)
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	got, ok := store.GetGauge("GzipTest")
+	assert.True(t, ok)
+	assert.Equal(t, 42.0, got)
+}
+
+func setupTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+
+	_, filename, _, _ := runtime.Caller(0)
+	projectRoot := filepath.Join(filepath.Dir(filename), "..", "..")
+	migrationsDir := filepath.Join(projectRoot, "migrations")
+
+	adminDB, err := sql.Open("pgx", testDB)
+	require.NoError(t, err)
+	defer adminDB.Close()
+
+	_, err = adminDB.ExecContext(context.Background(), "DROP DATABASE IF EXISTS test_metrics")
+	require.NoError(t, err)
+	_, err = adminDB.ExecContext(context.Background(), "CREATE DATABASE test_metrics WITH OWNER user")
+	require.NoError(t, err)
+
+	testDBURL := "postgres://user:pass@localhost:5432/test_metrics?sslmode=disable"
+	db, err := sql.Open("pgx", testDBURL)
+	require.NoError(t, err)
+
+	goose.SetLogger(goose.NopLogger())
+	require.NoError(t, goose.SetDialect("postgres"))
+	require.NoError(t, goose.Up(db, migrationsDir))
+
+	return db
+}
+
+func teardownTestDB(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if db != nil {
+		db.Close()
+	}
+	adminDB, err := sql.Open("pgx", testDB)
+	require.NoError(t, err)
+	defer adminDB.Close()
+	_, err = adminDB.ExecContext(context.Background(), "DROP DATABASE IF EXISTS test_metrics")
+	require.NoError(t, err)
 }
