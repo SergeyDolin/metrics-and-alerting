@@ -294,7 +294,7 @@ func valueJSONHandler(store storage.Storage) http.HandlerFunc {
 func pingSQLHandler(store storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if dbStore, ok := store.(*storage.DBStorage); ok {
-			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 			defer cancel()
 			if err := dbStore.Ping(ctx); err != nil {
 				http.Error(w, "Couldn't connect to the database: "+err.Error(), http.StatusInternalServerError)
