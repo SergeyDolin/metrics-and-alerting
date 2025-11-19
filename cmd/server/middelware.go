@@ -160,7 +160,7 @@ func (w *conditionalGzipResponseWriter) WriteHeader(statusCode int) {
 func verifySignatureMiddleware(key []byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if len(key) == 0 {
+			if len(key) == 0 || r.URL.Path == "/ping" {
 				next.ServeHTTP(w, r)
 				return
 			}
