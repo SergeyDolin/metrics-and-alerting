@@ -203,6 +203,7 @@ func signResponseMiddleware(key []byte) func(http.Handler) http.Handler {
 			recorder := &responseRecorder{
 				ResponseWriter: w,
 				body:           &bytes.Buffer{},
+				header:         make(http.Header),
 			}
 
 			next.ServeHTTP(recorder, r)
@@ -210,11 +211,10 @@ func signResponseMiddleware(key []byte) func(http.Handler) http.Handler {
 			responseHash := computeHMACSHA256(recorder.body.Bytes(), key)
 			w.Header().Set("HashSHA256", responseHash)
 
-			for k, values := range recorder.Header() {
-				for _, v := range values {
-					w.Header().Add(k, v)
-				}
+			for k, values := range recorder.header {
+				w.Header()[k] = values
 			}
+
 			w.WriteHeader(recorder.statusCode)
 			if recorder.body.Len() > 0 {
 				w.Write(recorder.body.Bytes())
@@ -226,12 +226,12 @@ func signResponseMiddleware(key []byte) func(http.Handler) http.Handler {
 type responseRecorder struct {
 	http.ResponseWriter
 	body       *bytes.Buffer
+	header     http.Header
 	statusCode int
 }
 
 func (r *responseRecorder) WriteHeader(code int) {
 	r.statusCode = code
-	r.ResponseWriter.WriteHeader(code)
 }
 
 func (r *responseRecorder) Write(b []byte) (int, error) {
