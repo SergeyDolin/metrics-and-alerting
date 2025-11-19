@@ -94,8 +94,10 @@ func main() {
 
 	router.Use(middleware.StripSlashes)
 	router.Use(gzipMiddleware)
-	router.Use(verifySignatureMiddleware(keyBytes))
-	router.Use(signResponseMiddleware(keyBytes))
+	if len(keyBytes) > 0 {
+		router.Use(verifySignatureMiddleware(keyBytes))
+		router.Use(signResponseMiddleware(keyBytes))
+	}
 	router.Use(logMiddleware(sugar))
 
 	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
