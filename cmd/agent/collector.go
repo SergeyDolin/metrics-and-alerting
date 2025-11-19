@@ -3,11 +3,20 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 )
+
+func computeHMACSHA256(data, key []byte) string {
+	h := hmac.New(sha256.New, key)
+	h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
+}
 
 func sendMetric(client *http.Client, name, typeMetric string, value string, serverAddr string) error {
 	// http://<АДРЕС_СЕРВЕРА>/update/<ТИП_МЕТРИКИ>/<ИМЯ_МЕТРИКИ>/<ЗНАЧЕНИЕ_МЕТРИКИ>
@@ -31,7 +40,7 @@ func sendMetric(client *http.Client, name, typeMetric string, value string, serv
 	return nil
 }
 
-func sendMetricJSON(client *http.Client, name, metricType string, serverAddr string, value *float64, delta *int64) error {
+func sendMetricJSON(client *http.Client, name, metricType string, serverAddr string, value *float64, delta *int64, key []byte) error {
 	var b bytes.Buffer
 
 	metric := Metrics{
@@ -55,6 +64,13 @@ func sendMetricJSON(client *http.Client, name, metricType string, serverAddr str
 		return fmt.Errorf("failed to close gzip writer: %w", err)
 	}
 
+	compBody := b.Bytes()
+
+	var hashHeader string
+	if len(key) > 0 {
+		hashHeader = computeHMACSHA256(compBody, key)
+	}
+
 	url := fmt.Sprintf("http://%s/update", serverAddr)
 	req, err := http.NewRequest(http.MethodPost, url, &b)
 	if err != nil {
@@ -63,6 +79,9 @@ func sendMetricJSON(client *http.Client, name, metricType string, serverAddr str
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
+	if hashHeader != "" {
+		req.Header.Set("HashSHA256", hashHeader)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -80,7 +99,7 @@ func sendMetricJSON(client *http.Client, name, metricType string, serverAddr str
 	return nil
 }
 
-func sendBatchJSON(client *http.Client, metricsList []Metrics, serverAddr string) error {
+func sendBatchJSON(client *http.Client, metricsList []Metrics, serverAddr string, key []byte) error {
 	if len(metricsList) == 0 {
 		return nil
 	}
@@ -100,6 +119,13 @@ func sendBatchJSON(client *http.Client, metricsList []Metrics, serverAddr string
 		return fmt.Errorf("failed to close gzip writer: %w", err)
 	}
 
+	compressedBody := b.Bytes()
+
+	var hashHeader string
+	if len(key) > 0 {
+		hashHeader = computeHMACSHA256(compressedBody, key)
+	}
+
 	url := fmt.Sprintf("http://%s/updates", serverAddr)
 	req, err := http.NewRequest(http.MethodPost, url, &b)
 	if err != nil {
@@ -108,6 +134,9 @@ func sendBatchJSON(client *http.Client, metricsList []Metrics, serverAddr string
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
+	if hashHeader != "" {
+		req.Header.Set("HashSHA256", hashHeader)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {

@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +26,12 @@ const (
 	MetricTypeGauge   MetricType = "gauge"
 	MetricTypeCounter MetricType = "counter"
 )
+
+func computeHMACSHA256(data, key []byte) string {
+	h := hmac.New(sha256.New, key)
+	h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
+}
 
 // indexHandler — возвращает HTTP-обработчик, который выводит все метрики (gauge и counter) в виде строки.
 // Формат: "metric1=value1, metric2=value2, ..."

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"compress/gzip"
 	"io"
 	"net/http"
@@ -154,4 +155,86 @@ func (w *conditionalGzipResponseWriter) WriteHeader(statusCode int) {
 
 		w.ResponseWriter.WriteHeader(statusCode)
 	}
+}
+
+func verifySignatureMiddleware(key []byte) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if len(key) == 0 {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "Failed to read request body", http.StatusBadRequest)
+				return
+			}
+			r.Body.Close()
+
+			r.Body = io.NopCloser(bytes.NewReader(body))
+
+			receivedHash := r.Header.Get("HashSHA256")
+			if receivedHash == "" {
+				http.Error(w, "Missing HashSHA256 header", http.StatusBadRequest)
+				return
+			}
+
+			expectedHash := computeHMACSHA256(body, key)
+
+			if receivedHash != expectedHash {
+				http.Error(w, "Invalid HashSHA256 signature", http.StatusBadRequest)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func signResponseMiddleware(key []byte) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if len(key) == 0 {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			recorder := &responseRecorder{
+				ResponseWriter: w,
+				body:           &bytes.Buffer{},
+			}
+
+			next.ServeHTTP(recorder, r)
+
+			responseHash := computeHMACSHA256(recorder.body.Bytes(), key)
+			w.Header().Set("HashSHA256", responseHash)
+
+			for k, values := range recorder.Header() {
+				for _, v := range values {
+					w.Header().Add(k, v)
+				}
+			}
+			w.WriteHeader(recorder.statusCode)
+			if recorder.body.Len() > 0 {
+				w.Write(recorder.body.Bytes())
+			}
+		})
+	}
+}
+
+type responseRecorder struct {
+	http.ResponseWriter
+	body       *bytes.Buffer
+	statusCode int
+}
+
+func (r *responseRecorder) WriteHeader(code int) {
+	r.statusCode = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *responseRecorder) Write(b []byte) (int, error) {
+	r.body.Write(b)
+	return len(b), nil
 }
