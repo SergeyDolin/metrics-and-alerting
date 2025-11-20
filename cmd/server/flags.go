@@ -69,7 +69,7 @@ func parseFlags() {
 		log.Printf("%s not set\n", dbName)
 	}
 
-	if key, ok := os.LookupEnv("DATABASE_DSN"); ok {
+	if key, ok := os.LookupEnv("KEY"); ok {
 		flagKey = key
 	} else {
 		log.Printf("%s not set\n", key)
