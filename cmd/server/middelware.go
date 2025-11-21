@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -176,7 +177,9 @@ func verifySignatureMiddleware(key []byte) func(http.Handler) http.Handler {
 
 			receivedHash := r.Header.Get("HashSHA256")
 			if receivedHash == "" {
-				http.Error(w, "Missing HashSHA256 header", http.StatusBadRequest)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "Missing HashSHA256 header"})
 				return
 			}
 
