@@ -69,6 +69,12 @@ func main() {
 	client := http.Client{}
 
 	parseArgs()
+
+	var keyBytes []byte
+	if *key != "" {
+		keyBytes = []byte(*key)
+	}
+
 	ms := createMetricStorage()
 
 	serverAddr := *sAddr
@@ -96,7 +102,7 @@ func main() {
 			}
 
 			err := retryWithBackoff(func() error {
-				return sendBatchJSON(&client, batch, serverAddr)
+				return sendBatchJSON(&client, batch, serverAddr, keyBytes)
 			})
 			if err != nil {
 				fmt.Printf("Batch send failed after reties: %v\n", err)
@@ -104,21 +110,13 @@ func main() {
 					mR := m
 					retryErr := retryWithBackoff(func() error {
 						if mR.MType == "gauge" {
-							return sendMetricJSON(&client, mR.ID, mR.MType, serverAddr, mR.Value, nil)
+							return sendMetricJSON(&client, mR.ID, mR.MType, serverAddr, mR.Value, nil, keyBytes)
 						} else {
-							return sendMetricJSON(&client, mR.ID, mR.MType, serverAddr, nil, mR.Delta)
+							return sendMetricJSON(&client, mR.ID, mR.MType, serverAddr, nil, mR.Delta, keyBytes)
 						}
 					})
 					if retryErr != nil {
 						fmt.Printf("Failed to send metric %s: %v\n", mR.ID, retryErr)
-					}
-				}
-			} else {
-				for _, m := range batch {
-					if m.MType == "gauge" {
-						sendMetricJSON(&client, m.ID, m.MType, serverAddr, m.Value, nil)
-					} else {
-						sendMetricJSON(&client, m.ID, m.MType, serverAddr, nil, m.Delta)
 					}
 				}
 			}
