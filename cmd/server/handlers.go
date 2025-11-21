@@ -33,6 +33,12 @@ func computeHMACSHA256(data, key []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+func writeJSONError(w http.ResponseWriter, code int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
 // indexHandler — возвращает HTTP-обработчик, который выводит все метрики (gauge и counter) в виде строки.
 // Формат: "metric1=value1, metric2=value2, ..."
 // Поддерживает только GET-запросы. При других методах возвращает ошибку 405.
@@ -199,46 +205,46 @@ func updateJSONHandler(store storage.Storage, saveFunc func()) http.HandlerFunc 
 	return func(res http.ResponseWriter, req *http.Request) {
 		var m metrics.Metrics
 		if err := json.NewDecoder(req.Body).Decode(&m); err != nil {
-			http.Error(res, "Invalid JSON", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Invalid JSON")
 			return
 		}
 
 		if m.ID == "" {
-			http.Error(res, "Missing metric ID", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Missing metric ID")
 			return
 		}
 
 		switch m.MType {
 		case "gauge":
 			if m.Value == nil {
-				http.Error(res, "Missing 'value' for gauge metric", http.StatusBadRequest)
+				writeJSONError(res, http.StatusBadRequest, "Missing 'value' for gauge metric")
 				return
 			}
 			if m.Delta != nil {
-				http.Error(res, "Unexpected 'delta' for gauge metric", http.StatusBadRequest)
+				writeJSONError(res, http.StatusBadRequest, "Unexpected 'delta' for gauge metric")
 				return
 			}
 			if err := store.UpdateGauge(m.ID, *m.Value); err != nil {
-				http.Error(res, "Storage error", http.StatusInternalServerError)
+				writeJSONError(res, http.StatusInternalServerError, "Storage error")
 				return
 			}
 
 		case "counter":
 			if m.Delta == nil {
-				http.Error(res, "Missing 'delta' for counter metric", http.StatusBadRequest)
+				writeJSONError(res, http.StatusBadRequest, "Missing 'delta' for counter metric")
 				return
 			}
 			if m.Value != nil {
-				http.Error(res, "Unexpected 'value' for counter metric", http.StatusBadRequest)
+				writeJSONError(res, http.StatusBadRequest, "Unexpected 'value' for counter metric")
 				return
 			}
 			if err := store.UpdateCounter(m.ID, *m.Delta); err != nil {
-				http.Error(res, "Storage error", http.StatusInternalServerError)
+				writeJSONError(res, http.StatusInternalServerError, "Storage error")
 				return
 			}
 
 		default:
-			http.Error(res, "Unknown metric type", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Unknown metric type")
 			return
 		}
 
@@ -252,12 +258,12 @@ func valueJSONHandler(store storage.Storage) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		var r metrics.Metrics
 		if err := json.NewDecoder(req.Body).Decode(&r); err != nil {
-			http.Error(res, "Invalid JSON", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Invalid JSON")
 			return
 		}
 
 		if r.ID == "" || r.MType == "" {
-			http.Error(res, "Missing ID or type", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Missing ID or type")
 			return
 		}
 
@@ -276,12 +282,12 @@ func valueJSONHandler(store storage.Storage) http.HandlerFunc {
 				found = true
 			}
 		default:
-			http.Error(res, "Unknown metric type", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Unknown metric type")
 			return
 		}
 
 		if !found {
-			http.Error(res, "Metric not found", http.StatusNotFound)
+			writeJSONError(res, http.StatusNotFound, "Metric not found")
 			return
 		}
 
@@ -309,41 +315,41 @@ func updatesBatchHandler(store storage.Storage, saveFunc func()) http.HandlerFun
 	return func(res http.ResponseWriter, req *http.Request) {
 		var batch []metrics.Metrics
 		if err := json.NewDecoder(req.Body).Decode(&batch); err != nil {
-			http.Error(res, "Invalid JSON", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Invalid JSON")
 			return
 		}
 
 		if len(batch) == 0 {
-			http.Error(res, "Empty batch not allowed", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Empty batch not allowed")
 			return
 		}
 
 		for _, m := range batch {
 			if m.ID == "" {
-				http.Error(res, "Missing metric ID in batch", http.StatusBadRequest)
+				writeJSONError(res, http.StatusBadRequest, "Missing metric ID in batch")
 				return
 			}
 			switch m.MType {
 			case "gauge":
 				if m.Value == nil {
-					http.Error(res, fmt.Sprintf("Missing 'value' for gauge metric %s", m.ID), http.StatusBadRequest)
+					writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Missing 'value' for gauge metric %s", m.ID))
 					return
 				}
 				if m.Delta != nil {
-					http.Error(res, fmt.Sprintf("Unexpected 'delta' for gauge metric %s", m.ID), http.StatusBadRequest)
+					writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Unexpected 'delta' for gauge metric %s", m.ID))
 					return
 				}
 			case "counter":
 				if m.Delta == nil {
-					http.Error(res, fmt.Sprintf("Missing 'delta' for counter metric %s", m.ID), http.StatusBadRequest)
+					writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Missing 'delta' for counter metric %s", m.ID))
 					return
 				}
 				if m.Value != nil {
-					http.Error(res, fmt.Sprintf("Unexpected 'value' for counter metric %s", m.ID), http.StatusBadRequest)
+					writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Unexpected 'value' for counter metric %s", m.ID))
 					return
 				}
 			default:
-				http.Error(res, fmt.Sprintf("Unknown metric type for %s", m.ID), http.StatusBadRequest)
+				writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Unknown metric type for %s", m.ID))
 				return
 			}
 		}
@@ -357,7 +363,7 @@ func updatesBatchHandler(store storage.Storage, saveFunc func()) http.HandlerFun
 				err = store.UpdateCounter(m.ID, *m.Delta)
 			}
 			if err != nil {
-				http.Error(res, "Storage error during batch update", http.StatusInternalServerError)
+				writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Storage error during batch update %s", m.ID))
 				return
 			}
 		}
