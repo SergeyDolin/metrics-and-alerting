@@ -230,6 +230,10 @@ type responseRecorder struct {
 	statusCode int
 }
 
+func (r *responseRecorder) Header() http.Header {
+	return r.header
+}
+
 func (r *responseRecorder) WriteHeader(code int) {
 	r.statusCode = code
 }
