@@ -40,7 +40,7 @@ func parseFlags() {
 	if address, ok := os.LookupEnv("ADDRESS"); ok {
 		flagRunAddr = address
 	} else {
-		log.Printf("%s not set\n", address)
+		log.Printf("ADDRESS not set\n")
 	}
 
 	if intervalStr, ok := os.LookupEnv("STORE_INTERVAL"); ok {
@@ -48,30 +48,30 @@ func parseFlags() {
 			flagStoreInterval = time.Duration(seconds) * time.Second
 		}
 	} else {
-		log.Printf("%s not set\n", intervalStr)
+		log.Printf("STORE_INTERVAL not set\n")
 	}
 
 	if filePath, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
 		flagFileStoragePath = filePath
 	} else {
-		log.Printf("%s not set\n", filePath)
+		log.Printf("FILE_STORAGE_PATH not set\n")
 	}
 
 	if restoreStr, ok := os.LookupEnv("RESTORE"); ok {
 		flagRestore = restoreStr == "true"
 	} else {
-		log.Printf("%s not set\n", restoreStr)
+		log.Printf("RESTORE not set\n")
 	}
 
 	if dbName, ok := os.LookupEnv("DATABASE_DSN"); ok {
 		flagSQL = dbName
 	} else {
-		log.Printf("%s not set\n", dbName)
+		log.Printf("DATABASE_DSN not set\n")
 	}
 
 	if key, ok := os.LookupEnv("KEY"); ok {
 		flagKey = key
 	} else {
-		log.Printf("%s not set\n", key)
+		log.Printf("KEY not set\n")
 	}
 }

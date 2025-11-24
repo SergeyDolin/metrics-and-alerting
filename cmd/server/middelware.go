@@ -177,9 +177,16 @@ func verifySignatureMiddleware(key []byte) func(http.Handler) http.Handler {
 
 			receivedHash := r.Header.Get("HashSHA256")
 			if receivedHash == "" {
+				if receivedHash == "" {
+					receivedHash = r.Header.Get("Hash")
+				}
+				if receivedHash == "none" {
+					next.ServeHTTP(w, r)
+					return
+				}
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]string{"error": "Missing HashSHA256 header"})
+				json.NewEncoder(w).Encode(map[string]string{"error": "Missing Hash header"})
 				return
 			}
 
@@ -214,7 +221,7 @@ func signResponseMiddleware(key []byte) func(http.Handler) http.Handler {
 
 			if recorder.body.Len() > 0 {
 				responseHash := computeHMACSHA256(recorder.body.Bytes(), key)
-				recorder.header.Set("HashSHA256", responseHash)
+				recorder.header.Set("Hash", responseHash)
 			}
 
 			for k, values := range recorder.header {
