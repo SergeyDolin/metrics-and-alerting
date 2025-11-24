@@ -71,7 +71,7 @@ func sendMetricJSON(client *http.Client, name, metricType string, serverAddr str
 		hashHeader = computeHMACSHA256(compBody, key)
 	}
 
-	url := fmt.Sprintf("http://%s/update/", serverAddr)
+	url := fmt.Sprintf("http://%s/update", serverAddr)
 	req, err := http.NewRequest(http.MethodPost, url, &b)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
