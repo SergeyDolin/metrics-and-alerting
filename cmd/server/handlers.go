@@ -238,7 +238,7 @@ func updateJSONHandler(store storage.Storage, saveFunc func()) http.HandlerFunc 
 				writeJSONError(res, http.StatusBadRequest, "Unexpected 'value' for counter metric")
 				return
 			}
-			if err := store.UpdateCounter(m.ID, *m.Delta); err != nil {
+			if err := store.SetCounter(m.ID, *m.Delta); err != nil {
 				writeJSONError(res, http.StatusInternalServerError, "Storage error")
 				return
 			}
@@ -360,7 +360,7 @@ func updatesBatchHandler(store storage.Storage, saveFunc func()) http.HandlerFun
 			case "gauge":
 				err = store.UpdateGauge(m.ID, *m.Value)
 			case "counter":
-				err = store.UpdateCounter(m.ID, *m.Delta)
+				err = store.SetCounter(m.ID, *m.Delta)
 			}
 			if err != nil {
 				writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Storage error during batch update %s", m.ID))
