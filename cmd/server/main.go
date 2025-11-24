@@ -109,7 +109,6 @@ func main() {
 
 	router.Get("/", indexHandler(store))
 	router.Post("/update", updateJSONHandler(store, saveSync))
-	router.Post("/update/", updateJSONHandler(store, saveSync))
 	router.Post("/updates", updatesBatchHandler(store, saveSync))
 	router.Get("/ping", pingSQLHandler(store))
 	router.Post("/value", valueJSONHandler(store))
