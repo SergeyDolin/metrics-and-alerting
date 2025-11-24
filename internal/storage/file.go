@@ -40,6 +40,13 @@ func (s *FileStorage) UpdateCounter(name string, delta int64) error {
 	return s.Save()
 }
 
+func (s *FileStorage) SetCounter(name string, value int64) error {
+	if err := s.MemStorage.SetCounter(name, value); err != nil {
+		return err
+	}
+	return s.Save()
+}
+
 func (s *FileStorage) Save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
