@@ -207,18 +207,22 @@ func signResponseMiddleware(key []byte) func(http.Handler) http.Handler {
 				ResponseWriter: w,
 				body:           &bytes.Buffer{},
 				header:         make(http.Header),
+				statusCode:     http.StatusOK,
 			}
 
 			next.ServeHTTP(recorder, r)
 
-			responseHash := computeHMACSHA256(recorder.body.Bytes(), key)
-			w.Header().Set("HashSHA256", responseHash)
+			if recorder.body.Len() > 0 {
+				responseHash := computeHMACSHA256(recorder.body.Bytes(), key)
+				recorder.header.Set("HashSHA256", responseHash)
+			}
 
 			for k, values := range recorder.header {
 				w.Header()[k] = values
 			}
 
 			w.WriteHeader(recorder.statusCode)
+
 			if recorder.body.Len() > 0 {
 				w.Write(recorder.body.Bytes())
 			}
