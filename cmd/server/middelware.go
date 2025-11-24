@@ -193,7 +193,7 @@ func verifySignatureMiddleware(key []byte) func(http.Handler) http.Handler {
 			expectedHash := computeHMACSHA256(body, key)
 
 			if receivedHash != expectedHash {
-				http.Error(w, "Invalid HashSHA256 signature", http.StatusBadRequest)
+				http.Error(w, "Invalid Hash signature", http.StatusBadRequest)
 				return
 			}
 
