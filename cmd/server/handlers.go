@@ -364,7 +364,7 @@ func updatesBatchHandler(store storage.Storage, saveFunc func()) http.HandlerFun
 			case "gauge":
 				err = store.UpdateGauge(m.ID, *m.Value)
 			case "counter":
-				err = store.SetCounter(m.ID, *m.Delta)
+				err = store.UpdateCounter(m.ID, *m.Delta)
 			}
 			if err != nil {
 				writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Storage error during batch update %s", m.ID))
