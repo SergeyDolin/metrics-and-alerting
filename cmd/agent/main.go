@@ -70,11 +70,6 @@ func main() {
 
 	parseArgs()
 
-	var keyBytes []byte
-	if *key != "" {
-		keyBytes = []byte(*key)
-	}
-
 	ms := createMetricStorage()
 
 	serverAddr := *sAddr
@@ -102,7 +97,7 @@ func main() {
 			}
 
 			err := retryWithBackoff(func() error {
-				return sendBatchJSON(&client, batch, serverAddr, keyBytes)
+				return sendBatchJSON(&client, batch, serverAddr)
 			})
 			if err != nil {
 				fmt.Printf("Batch send failed after reties: %v\n", err)
@@ -110,9 +105,9 @@ func main() {
 					mR := m
 					retryErr := retryWithBackoff(func() error {
 						if mR.MType == "gauge" {
-							return sendMetricJSON(&client, mR.ID, mR.MType, serverAddr, mR.Value, nil, keyBytes)
+							return sendMetricJSON(&client, mR.ID, mR.MType, serverAddr, mR.Value, nil)
 						} else {
-							return sendMetricJSON(&client, mR.ID, mR.MType, serverAddr, nil, mR.Delta, keyBytes)
+							return sendMetricJSON(&client, mR.ID, mR.MType, serverAddr, nil, mR.Delta)
 						}
 					})
 					if retryErr != nil {

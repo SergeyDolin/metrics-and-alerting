@@ -2,9 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +14,7 @@ import (
 	"github.com/go-chi/chi"
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
+	"github.com/SergeyDolin/metrics-and-alerting/internal/sha256"
 	"github.com/SergeyDolin/metrics-and-alerting/internal/storage"
 )
 
@@ -26,12 +24,6 @@ const (
 	MetricTypeGauge   MetricType = "gauge"
 	MetricTypeCounter MetricType = "counter"
 )
-
-func computeHMACSHA256(data, key []byte) string {
-	h := hmac.New(sha256.New, key)
-	h.Write(data)
-	return hex.EncodeToString(h.Sum(nil))
-}
 
 func writeJSONError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
@@ -249,8 +241,15 @@ func updateJSONHandler(store storage.Storage, saveFunc func()) http.HandlerFunc 
 		}
 
 		saveFunc()
+
+		responseBody, _ := json.Marshal(m)
+		if flagKey != "" {
+			hash := sha256.ComputeHMACSHA256(responseBody, flagKey)
+			res.Header().Set("HashSHA256", hash)
+		}
 		res.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(res).Encode(m)
+		res.WriteHeader(http.StatusOK)
+		res.Write(responseBody)
 	}
 }
 
@@ -291,8 +290,15 @@ func valueJSONHandler(store storage.Storage) http.HandlerFunc {
 			return
 		}
 
+		responseBody, _ := json.Marshal(resp)
+		if flagKey != "" {
+			hash := sha256.ComputeHMACSHA256(responseBody, flagKey)
+			res.Header().Set("HashSHA256", hash)
+		}
+
 		res.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(res).Encode(resp)
+		res.WriteHeader(http.StatusOK)
+		res.Write(responseBody)
 	}
 }
 
@@ -369,7 +375,14 @@ func updatesBatchHandler(store storage.Storage, saveFunc func()) http.HandlerFun
 		}
 
 		saveFunc()
+
+		responseBody, _ := json.Marshal(batch)
+		if flagKey != "" {
+			hash := sha256.ComputeHMACSHA256(responseBody, flagKey)
+			res.Header().Set("HashSHA256", hash)
+		}
 		res.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(res).Encode(batch)
+		res.WriteHeader(http.StatusOK)
+		res.Write(responseBody)
 	}
 }

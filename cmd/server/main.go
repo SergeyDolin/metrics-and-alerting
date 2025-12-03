@@ -22,11 +22,6 @@ import (
 func main() {
 	parseFlags()
 
-	var keyBytes []byte
-	if flagKey != "" {
-		keyBytes = []byte(flagKey)
-	}
-
 	logger, err := zap.NewDevelopment()
 	if err != nil {
 		logger.Fatal("cannot initialize zap")
@@ -94,9 +89,8 @@ func main() {
 
 	router.Use(middleware.StripSlashes)
 	router.Use(gzipMiddleware)
-	if len(keyBytes) > 0 {
-		router.Use(verifySignatureMiddleware(keyBytes))
-		router.Use(signResponseMiddleware(keyBytes))
+	if flagKey != "" {
+		router.Use(hashVerificationMiddleware)
 	}
 	router.Use(logMiddleware(sugar))
 
