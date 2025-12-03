@@ -248,8 +248,7 @@ func updateJSONHandler(store storage.Storage, saveFunc func()) http.HandlerFunc 
 			res.Header().Set("HashSHA256", hash)
 		}
 		res.Header().Set("Content-Type", "application/json")
-		res.WriteHeader(http.StatusOK)
-		res.Write(responseBody)
+		json.NewEncoder(res).Encode(m)
 	}
 }
 
@@ -297,8 +296,7 @@ func valueJSONHandler(store storage.Storage) http.HandlerFunc {
 		}
 
 		res.Header().Set("Content-Type", "application/json")
-		res.WriteHeader(http.StatusOK)
-		res.Write(responseBody)
+		json.NewEncoder(res).Encode(resp)
 	}
 }
 
@@ -382,7 +380,6 @@ func updatesBatchHandler(store storage.Storage, saveFunc func()) http.HandlerFun
 			res.Header().Set("HashSHA256", hash)
 		}
 		res.Header().Set("Content-Type", "application/json")
-		res.WriteHeader(http.StatusOK)
-		res.Write(responseBody)
+		json.NewEncoder(res).Encode(batch)
 	}
 }
