@@ -25,20 +25,6 @@ type (
 	}
 )
 
-type gzipResponseWriter struct {
-	io.Writer
-	http.ResponseWriter
-}
-
-func (w *gzipResponseWriter) Write(b []byte) (int, error) {
-	return w.Writer.Write(b)
-}
-
-func (w *gzipResponseWriter) WriteHeader(statusCode int) {
-	w.ResponseWriter.Header().Set("Vary", "Accept-Encoding")
-	w.ResponseWriter.WriteHeader(statusCode)
-}
-
 func (r *loggingResponseWriter) Write(b []byte) (int, error) {
 	size, err := r.ResponseWriter.Write(b)
 	r.responseData.size += size
