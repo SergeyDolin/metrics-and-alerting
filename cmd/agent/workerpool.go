@@ -58,9 +58,9 @@ func (wp *WorkerPool) worker(id int) {
 		case metric := <-wp.queue.queue:
 			err := retryWithBackoff(func() error {
 				if metric.MType == "gauge" {
-					return sendMetricJSON(wp.client, metric.ID, metric.MType, wp.serverAddr, wp.queue.Pop().Value, nil)
+					return sendMetricJSON(wp.client, metric.ID, metric.MType, wp.serverAddr, metric.Value, nil)
 				} else {
-					return sendMetricJSON(wp.client, metric.ID, metric.MType, wp.serverAddr, nil, wp.queue.Pop().Delta)
+					return sendMetricJSON(wp.client, metric.ID, metric.MType, wp.serverAddr, nil, metric.Delta)
 				}
 			})
 			if err != nil {

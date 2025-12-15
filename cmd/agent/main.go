@@ -1,7 +1,11 @@
 package main
 
 import (
+	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -54,5 +58,19 @@ func main() {
 		}
 	}()
 
-	select {}
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	<-sigChan
+	log.Printf("Shutdown signal received, waiting for workers to finish.")
+
+	pool.Stop()
+
+	time.Sleep(time.Duration(*pInterval) * time.Second)
+	for !queue.IsEmpty() {
+		metric := queue.Pop()
+		sendMetricJSON(&client, metric.ID, metric.MType, *sAddr, metric.Value, metric.Delta)
+	}
+
+	log.Println("Agent shutdown complete.")
 }

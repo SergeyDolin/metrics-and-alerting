@@ -32,10 +32,5 @@ func (mq *MetricQueue) Pop() Metrics {
 }
 
 func (mq *MetricQueue) IsEmpty() bool {
-	select {
-	case <-mq.queue:
-		return false
-	default:
-		return true
-	}
+	return len(mq.queue) == 0
 }
