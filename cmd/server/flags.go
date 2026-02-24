@@ -15,6 +15,8 @@ var (
 	flagRestore         bool
 	flagSQL             string
 	flagKey             string
+	flagAuditFile       string
+	flagAuditURL        string
 )
 
 // parseFlags обрабатывает аргументы командной строки и переменные окружения.
@@ -34,6 +36,10 @@ func parseFlags() {
 	flag.StringVar(&flagSQL, "d", "", "DB address")
 
 	flag.StringVar(&flagKey, "k", "", "HMAC key for request/response signing")
+
+	flag.StringVar(&flagAuditFile, "audit-file", "", "path to audit log file")
+
+	flag.StringVar(&flagAuditURL, "audit-url", "", "URL to send audit logs")
 
 	flag.Parse()
 
@@ -73,5 +79,17 @@ func parseFlags() {
 		flagKey = key
 	} else {
 		log.Printf("KEY not set\n")
+	}
+
+	if auditFile, ok := os.LookupEnv("AUDIT_FILE"); ok {
+		flagAuditFile = auditFile
+	} else {
+		log.Printf("AUDIT_FILE not set")
+	}
+
+	if auditURL, ok := os.LookupEnv("AUDIT_URL"); ok {
+		flagAuditURL = auditURL
+	} else {
+		log.Printf("AUDIT_URL not set")
 	}
 }

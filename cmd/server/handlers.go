@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
@@ -73,7 +75,7 @@ func indexHandler(store storage.Storage) func(http.ResponseWriter, *http.Request
 // URL: /value/{type}/{name}
 // Поддерживает только GET. Возвращает значение метрики или ошибку 404, если метрика не найдена.
 // Типы: "gauge" или "counter". Регистр не важен.
-func getHandler(store storage.Storage) func(http.ResponseWriter, *http.Request) {
+func getHandler(store storage.Storage, auditPublisher *Publisher) func(http.ResponseWriter, *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodGet {
 			http.Error(res, "Only GET request allowed!", http.StatusMethodNotAllowed)
@@ -86,6 +88,15 @@ func getHandler(store storage.Storage) func(http.ResponseWriter, *http.Request) 
 		switch metricType {
 		case "gauge":
 			if value, exists := store.GetGauge(metricName); exists {
+				if auditPublisher != nil {
+					ipAddress := getRealIP(req)
+					event := AuditEvent{
+						Timestamp: time.Now().Unix(),
+						Metrics:   []string{metricName},
+						IPAddress: ipAddress,
+					}
+					auditPublisher.Notify(event)
+				}
 				io.WriteString(res, fmt.Sprintf("%v", value))
 				return
 			}
@@ -94,6 +105,15 @@ func getHandler(store storage.Storage) func(http.ResponseWriter, *http.Request) 
 
 		case "counter":
 			if value, exists := store.GetCounter(metricName); exists {
+				if auditPublisher != nil {
+					ipAddress := getRealIP(req)
+					event := AuditEvent{
+						Timestamp: time.Now().Unix(),
+						Metrics:   []string{metricName},
+						IPAddress: ipAddress,
+					}
+					auditPublisher.Notify(event)
+				}
 				io.WriteString(res, fmt.Sprintf("%v", value))
 				return
 			}
@@ -148,7 +168,7 @@ func metricHandler(metricType MetricType, parser func(string) (interface{}, erro
 	}
 }
 
-func postHandler(store storage.Storage, saveFunc func()) http.HandlerFunc {
+func postHandler(store storage.Storage, saveFunc func(), auditPublisher *Publisher) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
 			http.Error(res, "Only POST request allowed!", http.StatusMethodNotAllowed)
@@ -188,12 +208,22 @@ func postHandler(store storage.Storage, saveFunc func()) http.HandlerFunc {
 			return
 		}
 
+		if auditPublisher != nil {
+			ipAddress := getRealIP(req)
+			event := AuditEvent{
+				Timestamp: time.Now().Unix(),
+				Metrics:   []string{name},
+				IPAddress: ipAddress,
+			}
+			auditPublisher.Notify(event)
+		}
+
 		saveFunc()
 		res.WriteHeader(http.StatusOK)
 	}
 }
 
-func updateJSONHandler(store storage.Storage, saveFunc func()) http.HandlerFunc {
+func updateJSONHandler(store storage.Storage, saveFunc func(), auditPublisher *Publisher) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		var m metrics.Metrics
 		if err := json.NewDecoder(req.Body).Decode(&m); err != nil {
@@ -240,6 +270,16 @@ func updateJSONHandler(store storage.Storage, saveFunc func()) http.HandlerFunc 
 			return
 		}
 
+		if auditPublisher != nil {
+			ipAddress := getRealIP(req)
+			event := AuditEvent{
+				Timestamp: time.Now().Unix(),
+				Metrics:   []string{m.ID},
+				IPAddress: ipAddress,
+			}
+			auditPublisher.Notify(event)
+		}
+
 		saveFunc()
 
 		responseBody, _ := json.Marshal(m)
@@ -252,7 +292,7 @@ func updateJSONHandler(store storage.Storage, saveFunc func()) http.HandlerFunc 
 	}
 }
 
-func valueJSONHandler(store storage.Storage) http.HandlerFunc {
+func valueJSONHandler(store storage.Storage, auditPublisher *Publisher) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		var r metrics.Metrics
 		if err := json.NewDecoder(req.Body).Decode(&r); err != nil {
@@ -295,6 +335,16 @@ func valueJSONHandler(store storage.Storage) http.HandlerFunc {
 			res.Header().Set("HashSHA256", hash)
 		}
 
+		if auditPublisher != nil {
+			ipAddress := getRealIP(req)
+			event := AuditEvent{
+				Timestamp: time.Now().Unix(),
+				Metrics:   []string{r.ID},
+				IPAddress: ipAddress,
+			}
+			auditPublisher.Notify(event)
+		}
+
 		res.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(res).Encode(resp)
 	}
@@ -315,7 +365,7 @@ func pingSQLHandler(store storage.Storage) http.HandlerFunc {
 	}
 }
 
-func updatesBatchHandler(store storage.Storage, saveFunc func()) http.HandlerFunc {
+func updatesBatchHandler(store storage.Storage, saveFunc func(), auditPublisher *Publisher) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		var batch []metrics.Metrics
 		if err := json.NewDecoder(req.Body).Decode(&batch); err != nil {
@@ -372,6 +422,20 @@ func updatesBatchHandler(store storage.Storage, saveFunc func()) http.HandlerFun
 			}
 		}
 
+		if auditPublisher != nil {
+			ipAddress := getRealIP(req)
+			metricNames := make([]string, len(batch))
+			for i, m := range batch {
+				metricNames[i] = m.ID
+			}
+			event := AuditEvent{
+				Timestamp: time.Now().Unix(),
+				Metrics:   metricNames,
+				IPAddress: ipAddress,
+			}
+			auditPublisher.Notify(event)
+		}
+
 		saveFunc()
 
 		responseBody, _ := json.Marshal(batch)
@@ -382,4 +446,24 @@ func updatesBatchHandler(store storage.Storage, saveFunc func()) http.HandlerFun
 		res.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(res).Encode(batch)
 	}
+}
+
+func getRealIP(req *http.Request) string {
+	// Check X-Forwarded-For header
+	if forwarded := req.Header.Get("X-Forwarded-For"); forwarded != "" {
+		// Take the first IP in case there are multiple
+		ips := strings.Split(forwarded, ",")
+		if len(ips) > 0 {
+			return strings.TrimSpace(ips[0])
+		}
+	}
+
+	// Check X-Real-IP header
+	if realIP := req.Header.Get("X-Real-IP"); realIP != "" {
+		return realIP
+	}
+
+	// Fallback to RemoteAddr
+	host, _, _ := net.SplitHostPort(req.RemoteAddr)
+	return host
 }
