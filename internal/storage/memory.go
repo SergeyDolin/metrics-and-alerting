@@ -33,6 +33,13 @@ func (s *MemStorage) UpdateCounter(name string, delta int64) error {
 	return nil
 }
 
+func (s *MemStorage) SetCounter(name string, value int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.counter[name] = value
+	return nil
+}
+
 func (s *MemStorage) GetGauge(name string) (float64, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"compress/gzip"
 	"io"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/SergeyDolin/metrics-and-alerting/internal/sha256"
 )
 
 type (
@@ -21,20 +24,6 @@ type (
 		responseData *responseData
 	}
 )
-
-type gzipResponseWriter struct {
-	io.Writer
-	http.ResponseWriter
-}
-
-func (w *gzipResponseWriter) Write(b []byte) (int, error) {
-	return w.Writer.Write(b)
-}
-
-func (w *gzipResponseWriter) WriteHeader(statusCode int) {
-	w.ResponseWriter.Header().Set("Vary", "Accept-Encoding")
-	w.ResponseWriter.WriteHeader(statusCode)
-}
 
 func (r *loggingResponseWriter) Write(b []byte) (int, error) {
 	size, err := r.ResponseWriter.Write(b)
@@ -154,4 +143,25 @@ func (w *conditionalGzipResponseWriter) WriteHeader(statusCode int) {
 
 		w.ResponseWriter.WriteHeader(statusCode)
 	}
+}
+
+func hashVerificationMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if flagKey != "" {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "Failed to read request body", http.StatusBadRequest)
+				return
+			}
+
+			expectedHash := r.Header.Get("HashSHA256")
+			if !sha256.VerifyHashSHA256(body, flagKey, expectedHash) {
+				http.Error(w, "Hash verification failed", http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }

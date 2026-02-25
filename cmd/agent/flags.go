@@ -7,12 +7,12 @@ import (
 	"strconv"
 )
 
-// -a=localhost:8080 -r=10 (reportInterval) -p=2 (pollInterval)
 var (
 	sAddr     = flag.String("a", "localhost:8080", "address and port to run server")
 	pInterval = flag.Int("r", 10, "reportInterval set")
 	rInterval = flag.Int("p", 2, "pollInterval set")
 	key       = flag.String("k", "", "key set")
+	rateLimit = flag.Int("l", 1, "rate limit set")
 )
 
 func parseArgs() {
@@ -50,5 +50,15 @@ func parseArgs() {
 		*key = keyOs
 	} else {
 		log.Printf("%s not set\n", keyOs)
+	}
+
+	if rateLim, ok := os.LookupEnv("RATE_LIMIT"); ok {
+		if rLimit, err := strconv.Atoi(rateLim); err == nil {
+			*rateLimit = rLimit
+		} else {
+			log.Printf("Invalid RATE_LIMIT value '%s': %v", rateLim, err)
+		}
+	} else {
+		log.Printf("%s not set\n", rateLim)
 	}
 }

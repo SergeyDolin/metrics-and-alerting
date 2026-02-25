@@ -138,6 +138,18 @@ func (s *DBStorage) UpdateCounter(name string, delta int64) error {
 	return nil
 }
 
+func (s *DBStorage) SetCounter(name string, value int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `INSERT INTO counter (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`
+	if err := s.execWithRetry(context.Background(), query, name, value); err != nil {
+		return fmt.Errorf("set counter %s: %w", name, err)
+	}
+	s.cache.counter[name] = value
+	return nil
+}
+
 func (s *DBStorage) SaveCounterValue(name string, value int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

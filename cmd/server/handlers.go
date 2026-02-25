@@ -5,15 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/go-chi/chi"
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
+	"github.com/SergeyDolin/metrics-and-alerting/internal/sha256"
 	"github.com/SergeyDolin/metrics-and-alerting/internal/storage"
 )
 
@@ -23,6 +26,12 @@ const (
 	MetricTypeGauge   MetricType = "gauge"
 	MetricTypeCounter MetricType = "counter"
 )
+
+func writeJSONError(w http.ResponseWriter, code int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
 
 // indexHandler — возвращает HTTP-обработчик, который выводит все метрики (gauge и counter) в виде строки.
 // Формат: "metric1=value1, metric2=value2, ..."
@@ -66,7 +75,7 @@ func indexHandler(store storage.Storage) func(http.ResponseWriter, *http.Request
 // URL: /value/{type}/{name}
 // Поддерживает только GET. Возвращает значение метрики или ошибку 404, если метрика не найдена.
 // Типы: "gauge" или "counter". Регистр не важен.
-func getHandler(store storage.Storage) func(http.ResponseWriter, *http.Request) {
+func getHandler(store storage.Storage, auditPublisher *Publisher) func(http.ResponseWriter, *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodGet {
 			http.Error(res, "Only GET request allowed!", http.StatusMethodNotAllowed)
@@ -79,6 +88,15 @@ func getHandler(store storage.Storage) func(http.ResponseWriter, *http.Request) 
 		switch metricType {
 		case "gauge":
 			if value, exists := store.GetGauge(metricName); exists {
+				if auditPublisher != nil {
+					ipAddress := getRealIP(req)
+					event := AuditEvent{
+						Timestamp: time.Now().Unix(),
+						Metrics:   []string{metricName},
+						IPAddress: ipAddress,
+					}
+					auditPublisher.Notify(event)
+				}
 				io.WriteString(res, fmt.Sprintf("%v", value))
 				return
 			}
@@ -87,6 +105,15 @@ func getHandler(store storage.Storage) func(http.ResponseWriter, *http.Request) 
 
 		case "counter":
 			if value, exists := store.GetCounter(metricName); exists {
+				if auditPublisher != nil {
+					ipAddress := getRealIP(req)
+					event := AuditEvent{
+						Timestamp: time.Now().Unix(),
+						Metrics:   []string{metricName},
+						IPAddress: ipAddress,
+					}
+					auditPublisher.Notify(event)
+				}
 				io.WriteString(res, fmt.Sprintf("%v", value))
 				return
 			}
@@ -141,7 +168,7 @@ func metricHandler(metricType MetricType, parser func(string) (interface{}, erro
 	}
 }
 
-func postHandler(store storage.Storage, saveFunc func()) http.HandlerFunc {
+func postHandler(store storage.Storage, saveFunc func(), auditPublisher *Publisher) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
 			http.Error(res, "Only POST request allowed!", http.StatusMethodNotAllowed)
@@ -181,74 +208,100 @@ func postHandler(store storage.Storage, saveFunc func()) http.HandlerFunc {
 			return
 		}
 
+		if auditPublisher != nil {
+			ipAddress := getRealIP(req)
+			event := AuditEvent{
+				Timestamp: time.Now().Unix(),
+				Metrics:   []string{name},
+				IPAddress: ipAddress,
+			}
+			auditPublisher.Notify(event)
+		}
+
 		saveFunc()
 		res.WriteHeader(http.StatusOK)
 	}
 }
 
-func updateJSONHandler(store storage.Storage, saveFunc func()) http.HandlerFunc {
+func updateJSONHandler(store storage.Storage, saveFunc func(), auditPublisher *Publisher) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		var m metrics.Metrics
 		if err := json.NewDecoder(req.Body).Decode(&m); err != nil {
-			http.Error(res, "Invalid JSON", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Invalid JSON")
 			return
 		}
 
 		if m.ID == "" {
-			http.Error(res, "Missing metric ID", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Missing metric ID")
 			return
 		}
 
 		switch m.MType {
 		case "gauge":
 			if m.Value == nil {
-				http.Error(res, "Missing 'value' for gauge metric", http.StatusBadRequest)
+				writeJSONError(res, http.StatusBadRequest, "Missing 'value' for gauge metric")
 				return
 			}
 			if m.Delta != nil {
-				http.Error(res, "Unexpected 'delta' for gauge metric", http.StatusBadRequest)
+				writeJSONError(res, http.StatusBadRequest, "Unexpected 'delta' for gauge metric")
 				return
 			}
 			if err := store.UpdateGauge(m.ID, *m.Value); err != nil {
-				http.Error(res, "Storage error", http.StatusInternalServerError)
+				writeJSONError(res, http.StatusInternalServerError, "Storage error")
 				return
 			}
 
 		case "counter":
 			if m.Delta == nil {
-				http.Error(res, "Missing 'delta' for counter metric", http.StatusBadRequest)
+				writeJSONError(res, http.StatusBadRequest, "Missing 'delta' for counter metric")
 				return
 			}
 			if m.Value != nil {
-				http.Error(res, "Unexpected 'value' for counter metric", http.StatusBadRequest)
+				writeJSONError(res, http.StatusBadRequest, "Unexpected 'value' for counter metric")
 				return
 			}
 			if err := store.UpdateCounter(m.ID, *m.Delta); err != nil {
-				http.Error(res, "Storage error", http.StatusInternalServerError)
+				writeJSONError(res, http.StatusInternalServerError, "Storage error")
 				return
 			}
 
 		default:
-			http.Error(res, "Unknown metric type", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Unknown metric type")
 			return
 		}
 
+		if auditPublisher != nil {
+			ipAddress := getRealIP(req)
+			event := AuditEvent{
+				Timestamp: time.Now().Unix(),
+				Metrics:   []string{m.ID},
+				IPAddress: ipAddress,
+			}
+			auditPublisher.Notify(event)
+		}
+
 		saveFunc()
+
+		responseBody, _ := json.Marshal(m)
+		if flagKey != "" {
+			hash := sha256.ComputeHMACSHA256(responseBody, flagKey)
+			res.Header().Set("HashSHA256", hash)
+		}
 		res.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(res).Encode(m)
 	}
 }
 
-func valueJSONHandler(store storage.Storage) http.HandlerFunc {
+func valueJSONHandler(store storage.Storage, auditPublisher *Publisher) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		var r metrics.Metrics
 		if err := json.NewDecoder(req.Body).Decode(&r); err != nil {
-			http.Error(res, "Invalid JSON", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Invalid JSON")
 			return
 		}
 
 		if r.ID == "" || r.MType == "" {
-			http.Error(res, "Missing ID or type", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Missing ID or type")
 			return
 		}
 
@@ -267,13 +320,29 @@ func valueJSONHandler(store storage.Storage) http.HandlerFunc {
 				found = true
 			}
 		default:
-			http.Error(res, "Unknown metric type", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Unknown metric type")
 			return
 		}
 
 		if !found {
-			http.Error(res, "Metric not found", http.StatusNotFound)
+			writeJSONError(res, http.StatusNotFound, "Metric not found")
 			return
+		}
+
+		responseBody, _ := json.Marshal(resp)
+		if flagKey != "" {
+			hash := sha256.ComputeHMACSHA256(responseBody, flagKey)
+			res.Header().Set("HashSHA256", hash)
+		}
+
+		if auditPublisher != nil {
+			ipAddress := getRealIP(req)
+			event := AuditEvent{
+				Timestamp: time.Now().Unix(),
+				Metrics:   []string{r.ID},
+				IPAddress: ipAddress,
+			}
+			auditPublisher.Notify(event)
 		}
 
 		res.Header().Set("Content-Type", "application/json")
@@ -296,45 +365,45 @@ func pingSQLHandler(store storage.Storage) http.HandlerFunc {
 	}
 }
 
-func updatesBatchHandler(store storage.Storage, saveFunc func()) http.HandlerFunc {
+func updatesBatchHandler(store storage.Storage, saveFunc func(), auditPublisher *Publisher) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		var batch []metrics.Metrics
 		if err := json.NewDecoder(req.Body).Decode(&batch); err != nil {
-			http.Error(res, "Invalid JSON", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Invalid JSON")
 			return
 		}
 
 		if len(batch) == 0 {
-			http.Error(res, "Empty batch not allowed", http.StatusBadRequest)
+			writeJSONError(res, http.StatusBadRequest, "Empty batch not allowed")
 			return
 		}
 
 		for _, m := range batch {
 			if m.ID == "" {
-				http.Error(res, "Missing metric ID in batch", http.StatusBadRequest)
+				writeJSONError(res, http.StatusBadRequest, "Missing metric ID in batch")
 				return
 			}
 			switch m.MType {
 			case "gauge":
 				if m.Value == nil {
-					http.Error(res, fmt.Sprintf("Missing 'value' for gauge metric %s", m.ID), http.StatusBadRequest)
+					writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Missing 'value' for gauge metric %s", m.ID))
 					return
 				}
 				if m.Delta != nil {
-					http.Error(res, fmt.Sprintf("Unexpected 'delta' for gauge metric %s", m.ID), http.StatusBadRequest)
+					writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Unexpected 'delta' for gauge metric %s", m.ID))
 					return
 				}
 			case "counter":
 				if m.Delta == nil {
-					http.Error(res, fmt.Sprintf("Missing 'delta' for counter metric %s", m.ID), http.StatusBadRequest)
+					writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Missing 'delta' for counter metric %s", m.ID))
 					return
 				}
 				if m.Value != nil {
-					http.Error(res, fmt.Sprintf("Unexpected 'value' for counter metric %s", m.ID), http.StatusBadRequest)
+					writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Unexpected 'value' for counter metric %s", m.ID))
 					return
 				}
 			default:
-				http.Error(res, fmt.Sprintf("Unknown metric type for %s", m.ID), http.StatusBadRequest)
+				writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Unknown metric type for %s", m.ID))
 				return
 			}
 		}
@@ -348,13 +417,53 @@ func updatesBatchHandler(store storage.Storage, saveFunc func()) http.HandlerFun
 				err = store.UpdateCounter(m.ID, *m.Delta)
 			}
 			if err != nil {
-				http.Error(res, "Storage error during batch update", http.StatusInternalServerError)
+				writeJSONError(res, http.StatusBadRequest, fmt.Sprintf("Storage error during batch update %s", m.ID))
 				return
 			}
 		}
 
+		if auditPublisher != nil {
+			ipAddress := getRealIP(req)
+			metricNames := make([]string, len(batch))
+			for i, m := range batch {
+				metricNames[i] = m.ID
+			}
+			event := AuditEvent{
+				Timestamp: time.Now().Unix(),
+				Metrics:   metricNames,
+				IPAddress: ipAddress,
+			}
+			auditPublisher.Notify(event)
+		}
+
 		saveFunc()
+
+		responseBody, _ := json.Marshal(batch)
+		if flagKey != "" {
+			hash := sha256.ComputeHMACSHA256(responseBody, flagKey)
+			res.Header().Set("HashSHA256", hash)
+		}
 		res.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(res).Encode(batch)
 	}
+}
+
+func getRealIP(req *http.Request) string {
+	// Check X-Forwarded-For header
+	if forwarded := req.Header.Get("X-Forwarded-For"); forwarded != "" {
+		// Take the first IP in case there are multiple
+		ips := strings.Split(forwarded, ",")
+		if len(ips) > 0 {
+			return strings.TrimSpace(ips[0])
+		}
+	}
+
+	// Check X-Real-IP header
+	if realIP := req.Header.Get("X-Real-IP"); realIP != "" {
+		return realIP
+	}
+
+	// Fallback to RemoteAddr
+	host, _, _ := net.SplitHostPort(req.RemoteAddr)
+	return host
 }
