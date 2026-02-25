@@ -7,9 +7,15 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	_ "net/http/pprof"
 )
 
 func main() {
+	go func() {
+		log.Println("pprof server started on :8081")
+		log.Println(http.ListenAndServe("localhost:8081", nil))
+	}()
 	client := http.Client{}
 
 	parseArgs()
@@ -22,14 +28,14 @@ func main() {
 	go func() {
 		pollInterval := time.Duration(*pInterval) * time.Second
 		counter := int64(0)
-
+		runtimeMetrics := make(map[string]float64, 30)
+		systemMetrics := make(map[string]float64, 5)
 		for {
+
 			time.Sleep(pollInterval)
 
-			runtimeMetrics := make(map[string]float64)
 			CollectRuntimeMetrics(runtimeMetrics)
 
-			systemMetrics := make(map[string]float64)
 			CollectSystemMetrics(systemMetrics)
 
 			counter++

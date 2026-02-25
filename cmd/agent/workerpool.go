@@ -55,18 +55,29 @@ func (wp *WorkerPool) worker(id int) {
 		select {
 		case <-wp.ctx.Done():
 			return
-		case metric := <-wp.queue.queue:
-			err := retryWithBackoff(func() error {
-				if metric.MType == "gauge" {
-					return sendMetricJSON(wp.client, metric.ID, metric.MType, wp.serverAddr, metric.Value, nil)
-				} else {
-					return sendMetricJSON(wp.client, metric.ID, metric.MType, wp.serverAddr, nil, metric.Delta)
-				}
-			})
-			if err != nil {
-				log.Printf("Worker %d: Failed to send metric %s: %v\n", id, metric.ID, err)
+		case metric, ok := <-wp.queue.queue:
+			if !ok {
+				return
 			}
+
+			wp.processMetric(id, &metric)
+
 		}
+	}
+}
+
+func (wp *WorkerPool) processMetric(id int, metric *Metrics) {
+	defer wp.queue.pool.Put(metric)
+
+	err := retryWithBackoff(func() error {
+		if metric.MType == "gauge" {
+			return sendMetricJSON(wp.client, metric.ID, metric.MType, wp.serverAddr, metric.Value, nil)
+		} else {
+			return sendMetricJSON(wp.client, metric.ID, metric.MType, wp.serverAddr, nil, metric.Delta)
+		}
+	})
+	if err != nil {
+		log.Printf("Worker %d: Failed to send metric %s: %v\n", id, metric.ID, err)
 	}
 }
 

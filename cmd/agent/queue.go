@@ -1,6 +1,9 @@
 package main
 
-import "log"
+import (
+	"log"
+	"sync"
+)
 
 type Metrics struct {
 	ID    string   `json:"id"`
@@ -11,11 +14,17 @@ type Metrics struct {
 
 type MetricQueue struct {
 	queue chan Metrics
+	pool  sync.Pool
 }
 
 func NewMetricQueue(size int) *MetricQueue {
 	return &MetricQueue{
-		queue: make(chan Metrics, size),
+		queue: make(chan Metrics, 100),
+		pool: sync.Pool{
+			New: func() interface{} {
+				return &Metrics{}
+			},
+		},
 	}
 }
 

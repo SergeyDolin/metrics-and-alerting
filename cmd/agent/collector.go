@@ -7,9 +7,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/sha256"
 )
+
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
+}
 
 func sendMetric(client *http.Client, name, typeMetric string, value string, serverAddr string) error {
 	// http://<АДРЕС_СЕРВЕРА>/update/<ТИП_МЕТРИКИ>/<ИМЯ_МЕТРИКИ>/<ЗНАЧЕНИЕ_МЕТРИКИ>
@@ -34,46 +41,11 @@ func sendMetric(client *http.Client, name, typeMetric string, value string, serv
 }
 
 func sendRequest(client *http.Client, url string, body []byte) error {
-	var b bytes.Buffer
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufferPool.Put(buf)
 
-	if *key != "" {
-		hash := sha256.ComputeHMACSHA256(body, *key)
-		if hash != "" {
-			gz := gzip.NewWriter(&b)
-			if _, err := gz.Write(body); err != nil {
-				gz.Close()
-				return fmt.Errorf("failed to compress body: %w", err)
-			}
-			if err := gz.Close(); err != nil {
-				return fmt.Errorf("failed to close gzip writer: %w", err)
-			}
-			req, err := http.NewRequest(http.MethodPost, url, &b)
-			if err != nil {
-				return fmt.Errorf("failed to create request: %w", err)
-			}
-
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Content-Encoding", "gzip")
-			req.Header.Set("HashSHA256", hash)
-
-			resp, err := client.Do(req)
-			if err != nil {
-				return fmt.Errorf("failed to send request: %w", err)
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				bodyBytes, _ := io.ReadAll(resp.Body)
-				return &httpError{
-					statusCode: resp.StatusCode,
-					msg:        string(bodyBytes),
-				}
-			}
-			return nil
-		}
-	}
-
-	gz := gzip.NewWriter(&b)
+	gz := gzip.NewWriter(buf)
 	if _, err := gz.Write(body); err != nil {
 		gz.Close()
 		return fmt.Errorf("failed to compress body: %w", err)
@@ -82,13 +54,18 @@ func sendRequest(client *http.Client, url string, body []byte) error {
 		return fmt.Errorf("failed to close gzip writer: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, &b)
+	req, err := http.NewRequest(http.MethodPost, url, buf)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
+
+	if *key != "" {
+		hash := sha256.ComputeHMACSHA256(body, *key)
+		req.Header.Set("HashSHA256", hash)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
