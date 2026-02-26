@@ -20,22 +20,41 @@ import (
 	"github.com/SergeyDolin/metrics-and-alerting/internal/storage"
 )
 
+// MetricType represents the type of metric (gauge or counter).
 type MetricType string
 
 const (
-	MetricTypeGauge   MetricType = "gauge"
+	// MetricTypeGauge represents a gauge metric type that stores floating-point values.
+	// Gauge metrics can go up and down (e.g., CPU usage, memory usage)
+	MetricTypeGauge MetricType = "gauge"
+
+	// MetricTypeCounter represents a counter metric type that stores integer values.
+	// Counter metrics are monotonically increasing (e.g., request count, poll count)
 	MetricTypeCounter MetricType = "counter"
 )
 
+// writeJSONError writes an error response in JSON format.
+// It sets the Content-Type header to application/json and writes the specified code and message.
+//
+// Parameters:
+//   - w: HTTP response writer
+//   - code: HTTP status code to return
+//   - message: Error message to include in the JSON response
 func writeJSONError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
-// indexHandler — возвращает HTTP-обработчик, который выводит все метрики (gauge и counter) в виде строки.
-// Формат: "metric1=value1, metric2=value2, ..."
-// Поддерживает только GET-запросы. При других методах возвращает ошибку 405.
+// indexHandler returns an HTTP handler that displays all metrics (gauge and counter) as HTML.
+// The format is a list of metric names with their values.
+// Supports only GET requests; returns 405 Method Not Allowed for other methods.
+//
+// Parameters:
+//   - store: Storage interface for retrieving all metrics
+//
+// Returns:
+//   - http.HandlerFunc: Handler function for the index endpoint
 func indexHandler(store storage.Storage) func(http.ResponseWriter, *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodGet {
@@ -50,6 +69,7 @@ func indexHandler(store storage.Storage) func(http.ResponseWriter, *http.Request
 
 		res.Header().Set("Content-Type", "text/html; charset=utf-8")
 
+		// Build HTML response with all metrics
 		html := `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><title>Metrics</title></head>
@@ -71,10 +91,17 @@ func indexHandler(store storage.Storage) func(http.ResponseWriter, *http.Request
 	}
 }
 
-// getHandler — возвращает HTTP-обработчик для получения значения конкретной метрики по типу и имени.
-// URL: /value/{type}/{name}
-// Поддерживает только GET. Возвращает значение метрики или ошибку 404, если метрика не найдена.
-// Типы: "gauge" или "counter". Регистр не важен.
+// getHandler returns an HTTP handler for retrieving the value of a specific metric by type and name.
+// URL pattern: /value/{type}/{name}
+// Supports only GET requests; returns 404 if the metric is not found or if the type is invalid.
+// Valid types: "gauge" or "counter" (case-insensitive).
+//
+// Parameters:
+//   - store: Storage interface for retrieving metrics
+//   - auditPublisher: Optional publisher for audit logging (can be nil)
+//
+// Returns:
+//   - http.HandlerFunc: Handler function for the value endpoint
 func getHandler(store storage.Storage, auditPublisher *Publisher) func(http.ResponseWriter, *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodGet {
@@ -88,6 +115,7 @@ func getHandler(store storage.Storage, auditPublisher *Publisher) func(http.Resp
 		switch metricType {
 		case "gauge":
 			if value, exists := store.GetGauge(metricName); exists {
+				// Log audit event if publisher is configured
 				if auditPublisher != nil {
 					ipAddress := getRealIP(req)
 					event := AuditEvent{
@@ -105,6 +133,7 @@ func getHandler(store storage.Storage, auditPublisher *Publisher) func(http.Resp
 
 		case "counter":
 			if value, exists := store.GetCounter(metricName); exists {
+				// Log audit event if publisher is configured
 				if auditPublisher != nil {
 					ipAddress := getRealIP(req)
 					event := AuditEvent{
@@ -127,12 +156,17 @@ func getHandler(store storage.Storage, auditPublisher *Publisher) func(http.Resp
 	}
 }
 
-// postHandler — возвращает HTTP-обработчик для обновления метрик через POST-запрос.
-// URL: /update/{type}/{name}/{value}
-// Поддерживает только POST. Валидирует тип значения в зависимости от типа метрики:
-// - gauge: требует float64
-// - counter: требует int64
-// При успехе возвращает 200 OK, при ошибках — соответствующие HTTP-ошибки.
+// metricHandler returns a generic HTTP handler for updating metrics via POST requests.
+// It validates the metric type and parses the value according to the specified parser function.
+// On success, it returns 200 OK; on errors, it returns appropriate HTTP error codes.
+//
+// Parameters:
+//   - metricType: Expected metric type (gauge or counter)
+//   - parser: Function to parse string value into appropriate type (float64 for gauge, int64 for counter)
+//   - updateFunc: Function to update the metric in storage
+//
+// Returns:
+//   - http.HandlerFunc: Handler function for the update endpoint
 func metricHandler(metricType MetricType, parser func(string) (interface{}, error), updateFunc func(string, interface{})) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
@@ -168,6 +202,20 @@ func metricHandler(metricType MetricType, parser func(string) (interface{}, erro
 	}
 }
 
+// postHandler returns an HTTP handler for updating metrics via POST requests.
+// URL pattern: /update/{type}/{name}/{value}
+// Supports only POST requests; validates the value type based on the metric type:
+// - gauge: requires float64
+// - counter: requires int64
+// On success, returns 200 OK; on errors, returns appropriate HTTP error codes.
+//
+// Parameters:
+//   - store: Storage interface for updating metrics
+//   - saveFunc: Function to persist metrics to disk/database
+//   - auditPublisher: Optional publisher for audit logging (can be nil)
+//
+// Returns:
+//   - http.HandlerFunc: Handler function for the update endpoint
 func postHandler(store storage.Storage, saveFunc func(), auditPublisher *Publisher) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
@@ -208,6 +256,7 @@ func postHandler(store storage.Storage, saveFunc func(), auditPublisher *Publish
 			return
 		}
 
+		// Log audit event if publisher is configured
 		if auditPublisher != nil {
 			ipAddress := getRealIP(req)
 			event := AuditEvent{
@@ -223,6 +272,18 @@ func postHandler(store storage.Storage, saveFunc func(), auditPublisher *Publish
 	}
 }
 
+// updateJSONHandler handles updating metrics via JSON payload.
+// Accepts a JSON object representing a metric with its type, name, and value.
+// Validates the metric type and value format before updating the storage.
+// Returns the updated metric in the response body along with appropriate HTTP status codes.
+//
+// Parameters:
+//   - store: Storage interface for updating metrics
+//   - saveFunc: Function to persist metrics to disk/database
+//   - auditPublisher: Optional publisher for audit logging (can be nil)
+//
+// Returns:
+//   - http.HandlerFunc: Handler function for the JSON update endpoint
 func updateJSONHandler(store storage.Storage, saveFunc func(), auditPublisher *Publisher) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		var m metrics.Metrics
@@ -236,6 +297,7 @@ func updateJSONHandler(store storage.Storage, saveFunc func(), auditPublisher *P
 			return
 		}
 
+		// Validate and process based on metric type
 		switch m.MType {
 		case "gauge":
 			if m.Value == nil {
@@ -270,6 +332,7 @@ func updateJSONHandler(store storage.Storage, saveFunc func(), auditPublisher *P
 			return
 		}
 
+		// Log audit event if publisher is configured
 		if auditPublisher != nil {
 			ipAddress := getRealIP(req)
 			event := AuditEvent{
@@ -282,6 +345,7 @@ func updateJSONHandler(store storage.Storage, saveFunc func(), auditPublisher *P
 
 		saveFunc()
 
+		// Add HMAC signature if key is configured
 		responseBody, _ := json.Marshal(m)
 		if flagKey != "" {
 			hash := sha256.ComputeHMACSHA256(responseBody, flagKey)
@@ -292,6 +356,16 @@ func updateJSONHandler(store storage.Storage, saveFunc func(), auditPublisher *P
 	}
 }
 
+// valueJSONHandler handles retrieving metric values via JSON payload.
+// Accepts a JSON object with metric ID and type, returns the current value.
+// Returns 404 if the metric is not found.
+//
+// Parameters:
+//   - store: Storage interface for retrieving metrics
+//   - auditPublisher: Optional publisher for audit logging (can be nil)
+//
+// Returns:
+//   - http.HandlerFunc: Handler function for the JSON value endpoint
 func valueJSONHandler(store storage.Storage, auditPublisher *Publisher) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		var r metrics.Metrics
@@ -308,6 +382,7 @@ func valueJSONHandler(store storage.Storage, auditPublisher *Publisher) http.Han
 		var resp metrics.Metrics
 		found := false
 
+		// Retrieve based on metric type
 		switch r.MType {
 		case "gauge":
 			if v, ok := store.GetGauge(r.ID); ok {
@@ -329,12 +404,14 @@ func valueJSONHandler(store storage.Storage, auditPublisher *Publisher) http.Han
 			return
 		}
 
+		// Add HMAC signature if key is configured
 		responseBody, _ := json.Marshal(resp)
 		if flagKey != "" {
 			hash := sha256.ComputeHMACSHA256(responseBody, flagKey)
 			res.Header().Set("HashSHA256", hash)
 		}
 
+		// Log audit event if publisher is configured
 		if auditPublisher != nil {
 			ipAddress := getRealIP(req)
 			event := AuditEvent{
@@ -350,8 +427,17 @@ func valueJSONHandler(store storage.Storage, auditPublisher *Publisher) http.Han
 	}
 }
 
+// pingSQLHandler checks the database connection health.
+// Returns 200 OK if the database is reachable, 500 Internal Server Error otherwise.
+//
+// Parameters:
+//   - store: Storage interface (must be *storage.DBStorage to check database connection)
+//
+// Returns:
+//   - http.HandlerFunc: Handler function for the ping endpoint
 func pingSQLHandler(store storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Check if storage is database-backed
 		if dbStore, ok := store.(*storage.DBStorage); ok {
 			if err := dbStore.Ping(context.Background()); err != nil {
 				http.Error(w, "Couldn't connect to the database: "+err.Error(), http.StatusInternalServerError)
@@ -365,6 +451,17 @@ func pingSQLHandler(store storage.Storage) http.HandlerFunc {
 	}
 }
 
+// updatesBatchHandler handles batch updates of multiple metrics in a single request.
+// Accepts a JSON array of metrics and updates all of them atomically.
+// Returns the updated batch in the response body.
+//
+// Parameters:
+//   - store: Storage interface for updating metrics
+//   - saveFunc: Function to persist metrics to disk/database
+//   - auditPublisher: Optional publisher for audit logging (can be nil)
+//
+// Returns:
+//   - http.HandlerFunc: Handler function for the batch update endpoint
 func updatesBatchHandler(store storage.Storage, saveFunc func(), auditPublisher *Publisher) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		var batch []metrics.Metrics
@@ -378,6 +475,7 @@ func updatesBatchHandler(store storage.Storage, saveFunc func(), auditPublisher 
 			return
 		}
 
+		// Validate each metric in the batch
 		for _, m := range batch {
 			if m.ID == "" {
 				writeJSONError(res, http.StatusBadRequest, "Missing metric ID in batch")
@@ -408,6 +506,7 @@ func updatesBatchHandler(store storage.Storage, saveFunc func(), auditPublisher 
 			}
 		}
 
+		// Update all metrics
 		for _, m := range batch {
 			var err error
 			switch m.MType {
@@ -422,6 +521,7 @@ func updatesBatchHandler(store storage.Storage, saveFunc func(), auditPublisher 
 			}
 		}
 
+		// Log batch audit event if publisher is configured
 		if auditPublisher != nil {
 			ipAddress := getRealIP(req)
 			metricNames := make([]string, len(batch))
@@ -438,6 +538,7 @@ func updatesBatchHandler(store storage.Storage, saveFunc func(), auditPublisher 
 
 		saveFunc()
 
+		// Add HMAC signature if key is configured
 		responseBody, _ := json.Marshal(batch)
 		if flagKey != "" {
 			hash := sha256.ComputeHMACSHA256(responseBody, flagKey)
@@ -448,6 +549,19 @@ func updatesBatchHandler(store storage.Storage, saveFunc func(), auditPublisher 
 	}
 }
 
+// getRealIP extracts the real client IP address from the request headers.
+// It checks in order:
+//  1. X-Forwarded-For header (taking the first IP in case of a list)
+//  2. X-Real-IP header
+//  3. RemoteAddr as fallback
+//
+// This is useful when the server is behind a reverse proxy.
+//
+// Parameters:
+//   - req: HTTP request object
+//
+// Returns:
+//   - string: The client's IP address
 func getRealIP(req *http.Request) string {
 	// Check X-Forwarded-For header
 	if forwarded := req.Header.Get("X-Forwarded-For"); forwarded != "" {

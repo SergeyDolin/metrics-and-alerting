@@ -12,12 +12,28 @@ import (
 	"github.com/SergeyDolin/metrics-and-alerting/internal/sha256"
 )
 
+// bufferPool is a sync.Pool for reusing bytes.Buffer instances to reduce memory allocations
+// when compressing request bodies with gzip. This improves performance by avoiding
+// repeated buffer creation and garbage collection overhead.
 var bufferPool = sync.Pool{
 	New: func() interface{} {
 		return new(bytes.Buffer)
 	},
 }
 
+// sendMetric sends a single metric to the server using the URL path format (deprecated method).
+// It constructs a URL in the format: http://<serverAddr>/update/<typeMetric>/<name>/<value>
+// and sends a POST request with Content-Type: text/plain.
+//
+// Parameters:
+//   - client: HTTP client used to send the request
+//   - name: Name of the metric
+//   - typeMetric: Type of the metric (e.g., "gauge", "counter")
+//   - value: String representation of the metric value
+//   - serverAddr: Server address in "host:port" format
+//
+// Returns:
+//   - error: nil if successful, otherwise an error describing what went wrong
 func sendMetric(client *http.Client, name, typeMetric string, value string, serverAddr string) error {
 	// http://<АДРЕС_СЕРВЕРА>/update/<ТИП_МЕТРИКИ>/<ИМЯ_МЕТРИКИ>/<ЗНАЧЕНИЕ_МЕТРИКИ>
 	url := fmt.Sprintf("http://%s/update/%s/%s/%s", serverAddr, typeMetric, name, value)
@@ -40,6 +56,18 @@ func sendMetric(client *http.Client, name, typeMetric string, value string, serv
 	return nil
 }
 
+// sendRequest is a helper function that sends an HTTP POST request with gzip compression.
+// It compresses the provided body using gzip, adds appropriate headers, and includes
+// a HMAC-SHA256 hash if a secret key is configured.
+//
+// Parameters:
+//   - client: HTTP client used to send the request
+//   - url: Target URL for the request
+//   - body: JSON-encoded body to be compressed and sent
+//
+// Returns:
+//   - error: nil if successful (HTTP 200 OK), otherwise an error with details
+//     including the server's response body for non-200 status codes
 func sendRequest(client *http.Client, url string, body []byte) error {
 	buf := bufferPool.Get().(*bytes.Buffer)
 	buf.Reset()
@@ -83,6 +111,20 @@ func sendRequest(client *http.Client, url string, body []byte) error {
 	return nil
 }
 
+// sendMetricJSON sends a single metric to the server in JSON format.
+// It creates a Metrics struct with the provided parameters, marshals it to JSON,
+// and sends it using the sendRequest helper function.
+//
+// Parameters:
+//   - client: HTTP client used to send the request
+//   - name: Name of the metric
+//   - metricType: Type of the metric ("gauge" or "counter")
+//   - serverAddr: Server address in "host:port" format
+//   - value: Pointer to float64 value (used for gauge metrics)
+//   - delta: Pointer to int64 value (used for counter metrics)
+//
+// Returns:
+//   - error: nil if successful, otherwise an error from sendRequest or JSON marshaling
 func sendMetricJSON(client *http.Client, name, metricType string, serverAddr string, value *float64, delta *int64) error {
 	metric := Metrics{
 		ID:    name,
@@ -100,6 +142,19 @@ func sendMetricJSON(client *http.Client, name, metricType string, serverAddr str
 	return sendRequest(client, url, body)
 }
 
+// sendBatchJSON sends a batch of metrics to the server in a single request.
+// It marshals the entire slice of Metrics to JSON and sends it to the /updates endpoint.
+// This is more efficient than sending multiple individual requests when dealing with
+// multiple metrics.
+//
+// Parameters:
+//   - client: HTTP client used to send the request
+//   - metricsList: Slice of Metrics structs to be sent
+//   - serverAddr: Server address in "host:port" format
+//
+// Returns:
+//   - error: nil if successful or if the metricsList is empty,
+//     otherwise an error from sendRequest or JSON marshaling
 func sendBatchJSON(client *http.Client, metricsList []Metrics, serverAddr string) error {
 
 	if len(metricsList) == 0 {
