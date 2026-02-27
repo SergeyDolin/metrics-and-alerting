@@ -276,8 +276,8 @@ func generateFieldReset(buf *bytes.Buffer, fieldName string, expr ast.Expr) {
 
 	case *ast.SelectorExpr:
 		// Type from another package
-		pkgName := fmt.Sprintf("%s", t.X)
-		typeName := fmt.Sprintf("%s", t.Sel)
+		pkgName := t.X.(*ast.Ident).Name // Получаем имя пакета напрямую
+		typeName := t.Sel.Name           // Получаем имя типа напрямую
 		buf.WriteString(fmt.Sprintf("\t// Reset field %s of external type %s.%s\n", fieldName, pkgName, typeName))
 		buf.WriteString(fmt.Sprintf("\tif resetter, ok := interface{}(&s.%s).(interface{ Reset() }); ok {\n", fieldName))
 		buf.WriteString("\t\tresetter.Reset()\n")
