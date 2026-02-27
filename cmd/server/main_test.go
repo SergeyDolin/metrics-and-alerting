@@ -1,23 +1,17 @@
-// handlers_test.go
-
 package main
 
 import (
 	"bytes"
 	"compress/gzip"
-	"context"
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi"
-	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -25,9 +19,6 @@ import (
 	"github.com/SergeyDolin/metrics-and-alerting/internal/storage"
 )
 
-const testDB = "postgres://user:pass@localhost:5432/postgres?sslmode=disable"
-
-// Вспомогательная функция для временного файла
 func tempFile(t *testing.T) string {
 	t.Helper()
 	f, err := os.CreateTemp("", "metrics-*.json")
@@ -38,17 +29,6 @@ func tempFile(t *testing.T) string {
 }
 
 func Test_postHandler(t *testing.T) {
-	store := storage.NewMemStorage()
-	router := chi.NewRouter()
-	router.Use(gzipMiddleware)
-	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "Only POST request allowed!", http.StatusMethodNotAllowed)
-	})
-	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "Invalid path format", http.StatusNotFound)
-	})
-	router.Post("/update/{type}/{name}/{value}", postHandler(store, func() {}))
-
 	tests := []struct {
 		name            string
 		method          string
@@ -118,7 +98,6 @@ func Test_postHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Перед каждым тестом — чистый storage
 			store := storage.NewMemStorage()
 			router := chi.NewRouter()
 			router.Use(gzipMiddleware)
@@ -128,7 +107,7 @@ func Test_postHandler(t *testing.T) {
 			router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Invalid path format", http.StatusNotFound)
 			})
-			router.Post("/update/{type}/{name}/{value}", postHandler(store, func() {}))
+			router.Post("/update/{type}/{name}/{value}", postHandler(store, func() {}, nil))
 
 			req := httptest.NewRequest(tt.method, tt.url, nil)
 			rr := httptest.NewRecorder()
@@ -224,7 +203,11 @@ func Test_updateJSONHandler(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := storage.NewMemStorage()
 			router := chi.NewRouter()
-			router.Post("/update", updateJSONHandler(store, func() {}))
+			oldFlagKey := flagKey
+			flagKey = ""
+			defer func() { flagKey = oldFlagKey }()
+
+			router.Post("/update", updateJSONHandler(store, func() {}, nil))
 
 			req := httptest.NewRequest(http.MethodPost, "/update", strings.NewReader(tt.jsonBody))
 			req.Header.Set("Content-Type", "application/json")
@@ -259,7 +242,11 @@ func Test_valueJSONHandler(t *testing.T) {
 	store.UpdateCounter("PollCount", 42)
 
 	router := chi.NewRouter()
-	router.Post("/value", valueJSONHandler(store))
+	oldFlagKey := flagKey
+	flagKey = ""
+	defer func() { flagKey = oldFlagKey }()
+
+	router.Post("/value", valueJSONHandler(store, nil))
 
 	tests := []struct {
 		name           string
@@ -292,12 +279,19 @@ func Test_valueJSONHandler(t *testing.T) {
 			name:           "Get non-existing gauge",
 			jsonBody:       `{"id": "NonExistent", "type": "gauge"}`,
 			expectedStatus: http.StatusNotFound,
+			expectedError:  "Metric not found",
 		},
 		{
 			name:           "Invalid JSON",
 			jsonBody:       `{"id": "Test"`,
 			expectedStatus: http.StatusBadRequest,
 			expectedError:  "Invalid JSON",
+		},
+		{
+			name:           "Missing type",
+			jsonBody:       `{"id": "Temperature"}`,
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "Missing ID or type",
 		},
 	}
 
@@ -370,7 +364,23 @@ func Test_batchUpdateHandler(t *testing.T) {
 				{"id": "Test", "type": "gauge"}
 			]`,
 			expectedStatus: http.StatusBadRequest,
-			expectedBody:   "Missing 'value' for gauge metric",
+			expectedBody:   "Missing 'value' for gauge metric Test",
+		},
+		{
+			name: "Counter without delta",
+			jsonBody: `[
+				{"id": "Test", "type": "counter"}
+			]`,
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Missing 'delta' for counter metric Test",
+		},
+		{
+			name: "Invalid metric type",
+			jsonBody: `[
+				{"id": "Test", "type": "unknown", "value": 100}
+			]`,
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Unknown metric type for Test",
 		},
 	}
 
@@ -378,7 +388,11 @@ func Test_batchUpdateHandler(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := storage.NewMemStorage()
 			router := chi.NewRouter()
-			router.Post("/updates", updatesBatchHandler(store, func() {})) // обратите внимание: путь без слеша
+			oldFlagKey := flagKey
+			flagKey = ""
+			defer func() { flagKey = oldFlagKey }()
+
+			router.Post("/updates", updatesBatchHandler(store, func() {}, nil))
 
 			req := httptest.NewRequest(http.MethodPost, "/updates", strings.NewReader(tt.jsonBody))
 			req.Header.Set("Content-Type", "application/json")
@@ -411,12 +425,17 @@ func Test_batchUpdateHandler_Gzip(t *testing.T) {
 	store := storage.NewMemStorage()
 	router := chi.NewRouter()
 	router.Use(gzipMiddleware)
-	router.Post("/updates", updatesBatchHandler(store, func() {}))
+	oldFlagKey := flagKey
+	flagKey = ""
+	defer func() { flagKey = oldFlagKey }()
+
+	router.Post("/updates", updatesBatchHandler(store, func() {}, nil))
 
 	data := `[{"id": "GzipTest", "type": "gauge", "value": 42.0}]`
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
-	gz.Write([]byte(data))
+	_, err := gz.Write([]byte(data))
+	require.NoError(t, err)
 	gz.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/updates", &buf)
@@ -432,41 +451,94 @@ func Test_batchUpdateHandler_Gzip(t *testing.T) {
 	assert.Equal(t, 42.0, got)
 }
 
-func setupTestDB(t *testing.T) *sql.DB {
-	t.Helper()
+func Test_getHandler(t *testing.T) {
+	store := storage.NewMemStorage()
+	store.UpdateGauge("Temperature", 25.5)
+	store.UpdateCounter("PollCount", 42)
 
-	_, filename, _, _ := runtime.Caller(0)
-	projectRoot := filepath.Join(filepath.Dir(filename), "..", "..")
-	migrationsDir := filepath.Join(projectRoot, "migrations")
+	router := chi.NewRouter()
+	router.Get("/value/{type}/{name}", getHandler(store, nil))
 
-	adminDB, err := sql.Open("pgx", testDB)
-	require.NoError(t, err)
-	defer adminDB.Close()
+	tests := []struct {
+		name           string
+		url            string
+		expectedStatus int
+		expectedBody   string
+	}{
+		{
+			name:           "Get existing gauge",
+			url:            "/value/gauge/Temperature",
+			expectedStatus: http.StatusOK,
+			expectedBody:   "25.5",
+		},
+		{
+			name:           "Get existing counter",
+			url:            "/value/counter/PollCount",
+			expectedStatus: http.StatusOK,
+			expectedBody:   "42",
+		},
+		{
+			name:           "Get non-existing gauge",
+			url:            "/value/gauge/NonExistent",
+			expectedStatus: http.StatusNotFound,
+			expectedBody:   "Unknown metric name",
+		},
+		{
+			name:           "Invalid metric type",
+			url:            "/value/unknown/Test",
+			expectedStatus: http.StatusNotFound,
+			expectedBody:   "Unknown metric type",
+		},
+	}
 
-	_, err = adminDB.ExecContext(context.Background(), "DROP DATABASE IF EXISTS test_metrics")
-	require.NoError(t, err)
-	_, err = adminDB.ExecContext(context.Background(), "CREATE DATABASE test_metrics WITH OWNER user")
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
 
-	testDBURL := "postgres://user:pass@localhost:5432/test_metrics?sslmode=disable"
-	db, err := sql.Open("pgx", testDBURL)
-	require.NoError(t, err)
-
-	goose.SetLogger(goose.NopLogger())
-	require.NoError(t, goose.SetDialect("postgres"))
-	require.NoError(t, goose.Up(db, migrationsDir))
-
-	return db
+			assert.Equal(t, tt.expectedStatus, rr.Code)
+			assert.Contains(t, rr.Body.String(), tt.expectedBody)
+		})
+	}
 }
 
-func teardownTestDB(t *testing.T, db *sql.DB) {
-	t.Helper()
-	if db != nil {
-		db.Close()
+func Test_indexHandler(t *testing.T) {
+	store := storage.NewMemStorage()
+	store.UpdateGauge("Temperature", 25.5)
+	store.UpdateCounter("PollCount", 42)
+
+	router := chi.NewRouter()
+	router.Get("/", indexHandler(store))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "Temperature")
+	assert.Contains(t, rr.Body.String(), "25.5")
+	assert.Contains(t, rr.Body.String(), "PollCount")
+	assert.Contains(t, rr.Body.String(), "42")
+}
+
+func TestAuditPublisher(t *testing.T) {
+	tmpFile := tempFile(t)
+
+	fileObserver := NewFileWriterObserver(tmpFile)
+
+	publisher := NewPublisher([]Observer{fileObserver})
+	defer publisher.Close()
+
+	event := AuditEvent{
+		Timestamp: time.Now().Unix(),
+		Metrics:   []string{"test_metric"},
+		IPAddress: "127.0.0.1",
 	}
-	adminDB, err := sql.Open("pgx", testDB)
+
+	publisher.Notify(event)
+	data, err := os.ReadFile(tmpFile)
 	require.NoError(t, err)
-	defer adminDB.Close()
-	_, err = adminDB.ExecContext(context.Background(), "DROP DATABASE IF EXISTS test_metrics")
-	require.NoError(t, err)
+	assert.Contains(t, string(data), "test_metric")
+	assert.Contains(t, string(data), "127.0.0.1")
 }
