@@ -12,34 +12,59 @@ import (
 	"github.com/go-chi/chi/middleware"
 )
 
-// main — точка входа приложения.
-// Инициализирует роутер chi, создаёт хранилище метрик и настраивает маршруты:
-// - GET / — список всех метрик
-// - POST /update/{type}/{name}/{value} — обновление метрики
-// - GET /value/{type}/{name} — получение значения метрики
-// Запускает HTTP-сервер на порту 8080.
-// Также задаёт глобальные обработчики для MethodNotAllowed и NotFound.
+// main is the entry point for the metrics collection server application.
+// It initializes the chi router, creates the appropriate metrics storage backend,
+// configures HTTP routes, and starts the server.
+//
+// The server supports multiple storage backends:
+//   - PostgreSQL database (when DATABASE_DSN is provided)
+//   - File-based storage (when FILE_STORAGE_PATH is provided)
+//   - In-memory storage (fallback)
+//
+// The following endpoints are configured:
+//   - GET / - HTML page listing all metrics
+//   - POST /update - Update a single metric via JSON
+//   - POST /updates - Batch update multiple metrics via JSON
+//   - GET /ping - Database health check (if using PostgreSQL)
+//   - POST /value - Retrieve a metric value via JSON
+//   - POST /update/{type}/{name}/{value} - Update a metric via URL parameters (legacy)
+//   - GET /value/{type}/{name} - Retrieve a metric value via URL parameters (legacy)
+//
+// The server also supports:
+//   - Gzip compression middleware
+//   - HMAC signature verification when a key is configured
+//   - Request logging
+//   - Audit logging to file or HTTP endpoint when configured
+//   - Periodic or synchronous metric persistence to disk
 func main() {
+	// Parse configuration from command-line flags and environment variables
 	parseFlags()
 
+	// Initialize structured logger for the application
 	logger, err := zap.NewDevelopment()
 	if err != nil {
 		logger.Fatal("cannot initialize zap")
 	}
-	defer logger.Sync()
+	defer logger.Sync() // Flush any buffered log entries
 	sugar := logger.Sugar()
 
+	// Initialize router
 	router := chi.NewRouter()
+
+	// Storage interface and save function for metrics persistence
 	var store storage.Storage
 	var saveSync func()
 
+	// Configure storage backend based on flags
 	if flagSQL != "" {
+		// PostgreSQL database storage
 		sugar.Infof("Initializing PostgreSQL storage with DSN: %s", flagSQL)
 
 		dbStorage, err := storage.NewDBStorage(flagSQL)
 		if err != nil {
 			sugar.Fatalf("Failed to open DB connection: %v", err)
 		}
+		// Ensure database connection is properly closed on exit
 		defer func() {
 			if err := dbStorage.SaveAll(); err != nil {
 				sugar.Errorf("Failed to save metrics on exit: %v", err)
@@ -47,9 +72,12 @@ func main() {
 			dbStorage.Close()
 		}()
 		store = dbStorage
+		// Database storage persists immediately, no sync function needed
 		saveSync = func() {}
 	} else {
+		// File-based or in-memory storage
 		if flagFileStoragePath != "" && flagRestore {
+			// Attempt to restore metrics from file if configured
 			fileStorage, err := storage.NewFileStorage(flagFileStoragePath)
 			if err != nil {
 				sugar.Warnf("Failed to restore metrics from file: %v", err)
@@ -57,10 +85,13 @@ func main() {
 				store = fileStorage
 			}
 		}
+
+		// Fallback to in-memory storage if no file storage was created
 		if store == nil {
 			store = storage.NewMemStorage()
 		}
-		// Фоновое сохранение
+
+		// Configure periodic background saving for file storage
 		if flagStoreInterval > 0 && flagFileStoragePath != "" {
 			if fs, ok := store.(*storage.FileStorage); ok {
 				go func() {
@@ -75,7 +106,8 @@ func main() {
 			}
 		}
 
-		// Обёртка сохранения для файла/памяти
+		// Configure synchronous save function for file storage
+		// This is used when flagStoreInterval == 0 (save after each update)
 		saveSync = func() {
 			if flagStoreInterval == 0 && flagFileStoragePath != "" {
 				if fs, ok := store.(*storage.FileStorage); ok {
@@ -87,25 +119,62 @@ func main() {
 		}
 	}
 
-	router.Use(middleware.StripSlashes)
-	router.Use(gzipMiddleware)
-	router.Use(logMiddleware(sugar))
+	// Configure audit logging observers
+	var auditObservers []Observer
+	if flagAuditFile != "" {
+		// Add file-based audit logging
+		auditObservers = append(auditObservers, NewFileWriterObserver(flagAuditFile))
+	}
+	if flagAuditURL != "" {
+		// Add HTTP-based audit logging
+		auditObservers = append(auditObservers, NewHTTPSenderObserver(flagAuditURL))
+	}
 
+	// Create audit publisher if any observers are configured
+	var auditPublisher *Publisher
+	if len(auditObservers) > 0 {
+		auditPublisher = NewPublisher(auditObservers)
+		defer auditPublisher.Close() // Ensure all audit logs are flushed on shutdown
+	}
+
+	// Apply global middleware to all routes
+	router.Use(middleware.StripSlashes) // Remove trailing slashes from URLs
+	router.Use(gzipMiddleware)          // Support gzip compression for requests/responses
+	if flagKey != "" {
+		// Add HMAC signature verification middleware if key is configured
+		router.Use(hashVerificationMiddleware)
+	}
+	router.Use(logMiddleware(sugar)) // Add request logging
+
+	// Initialize all handler functions
+	indexHandlerFunc := indexHandler(store)
+	updateJSONHandlerFunc := updateJSONHandler(store, saveSync, auditPublisher)
+	updatesBatchHandlerFunc := updatesBatchHandler(store, saveSync, auditPublisher)
+	valueJSONHandlerFunc := valueJSONHandler(store, auditPublisher)
+	postHandlerFunc := postHandler(store, saveSync, auditPublisher)
+	getHandlerFunc := getHandler(store, auditPublisher)
+	pingSQLHandlerFunc := pingSQLHandler(store)
+
+	// Configure custom error handlers
 	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+		// Return 405 for methods not allowed on a route
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	})
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		// Return 404 for non-existent routes
 		http.Error(w, "Invalid path format", http.StatusNotFound)
 	})
 
-	router.Get("/", indexHandler(store))
-	router.Post("/update", updateJSONHandler(store, saveSync))
-	router.Post("/updates", updatesBatchHandler(store, saveSync))
-	router.Get("/ping", pingSQLHandler(store))
-	router.Post("/value", valueJSONHandler(store))
-	router.Post("/update/{type}/{name}/{value}", postHandler(store, saveSync))
-	router.Get("/value/{type}/{name}", getHandler(store))
+	// Register routes with their handlers
+	router.Get("/", indexHandlerFunc)                             // HTML metrics listing
+	router.Post("/update", updateJSONHandlerFunc)                 // Single metric JSON update
+	router.Post("/updates", updatesBatchHandlerFunc)              // Batch JSON update
+	router.Get("/ping", pingSQLHandlerFunc)                       // Database health check
+	router.Post("/value", valueJSONHandlerFunc)                   // JSON metric retrieval
+	router.Post("/update/{type}/{name}/{value}", postHandlerFunc) // Legacy URL param update
+	router.Get("/value/{type}/{name}", getHandlerFunc)            // Legacy URL param retrieval
 
+	// Start the HTTP server
 	sugar.Infof("Running server on %s", flagRunAddr)
 	sugar.Fatal(http.ListenAndServe(flagRunAddr, router))
 }
