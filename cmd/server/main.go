@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -11,6 +12,36 @@ import (
 
 	"github.com/go-chi/chi/middleware"
 )
+
+// Build information variables - set during compilation with ldflags
+var (
+	// buildVersion contains the version of the build (e.g., "1.0.0")
+	buildVersion string = "N/A"
+
+	// buildDate contains the date when the build was created (e.g., "2025-02-27T10:00:00Z")
+	buildDate string = "N/A"
+
+	// buildCommit contains the git commit hash of the source code
+	buildCommit string = "N/A"
+)
+
+// printBuildInfo displays build version information on application startup.
+func printBuildInfo() {
+	if buildVersion == "" {
+		buildVersion = "N/A"
+	}
+	if buildDate == "" {
+		buildDate = "N/A"
+	}
+	if buildCommit == "" {
+		buildCommit = "N/A"
+	}
+
+	fmt.Printf("Build version: %s\n", buildVersion)
+	fmt.Printf("Build date: %s\n", buildDate)
+	fmt.Printf("Build commit: %s\n", buildCommit)
+	fmt.Println()
+}
 
 // main is the entry point for the metrics collection server application.
 // It initializes the chi router, creates the appropriate metrics storage backend,
@@ -37,6 +68,8 @@ import (
 //   - Audit logging to file or HTTP endpoint when configured
 //   - Periodic or synchronous metric persistence to disk
 func main() {
+	// Print build information on startup for debugging and traceability
+	printBuildInfo()
 	// Parse configuration from command-line flags and environment variables
 	parseFlags()
 
