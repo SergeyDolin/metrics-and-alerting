@@ -25,6 +25,8 @@ import (
 //
 // All write operations are protected by a mutex to ensure consistency between
 // the database and in-memory cache.
+//
+// generate:reset
 type DBStorage struct {
 	conn  *pgx.Conn    // PostgreSQL connection
 	cache *MemStorage  // In-memory cache for fast reads

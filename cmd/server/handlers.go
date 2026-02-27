@@ -156,52 +156,6 @@ func getHandler(store storage.Storage, auditPublisher *Publisher) func(http.Resp
 	}
 }
 
-// metricHandler returns a generic HTTP handler for updating metrics via POST requests.
-// It validates the metric type and parses the value according to the specified parser function.
-// On success, it returns 200 OK; on errors, it returns appropriate HTTP error codes.
-//
-// Parameters:
-//   - metricType: Expected metric type (gauge or counter)
-//   - parser: Function to parse string value into appropriate type (float64 for gauge, int64 for counter)
-//   - updateFunc: Function to update the metric in storage
-//
-// Returns:
-//   - http.HandlerFunc: Handler function for the update endpoint
-func metricHandler(metricType MetricType, parser func(string) (interface{}, error), updateFunc func(string, interface{})) http.HandlerFunc {
-	return func(res http.ResponseWriter, req *http.Request) {
-		if req.Method != http.MethodPost {
-			http.Error(res, "Only POST request allowed!", http.StatusMethodNotAllowed)
-			return
-		}
-
-		typeOfMetric := strings.ToLower(chi.URLParam(req, "type"))
-		nameOfMetric := chi.URLParam(req, "name")
-		valueOfMetric := chi.URLParam(req, "value")
-
-		if MetricType(typeOfMetric) != metricType {
-			http.Error(res, "Invalid type of metric!", http.StatusBadRequest)
-			return
-		}
-
-		parseValue, err := parser(valueOfMetric)
-		if err != nil {
-			var errorMes string
-			switch metricType {
-			case MetricTypeGauge:
-				errorMes = "Only Float type for Gauge allowed!"
-			case MetricTypeCounter:
-				errorMes = "Only Int type for Counter allowed!"
-			default:
-				errorMes = "Unknown metric type"
-			}
-			http.Error(res, errorMes, http.StatusBadRequest)
-			return
-		}
-		updateFunc(nameOfMetric, parseValue)
-		res.WriteHeader(http.StatusOK)
-	}
-}
-
 // postHandler returns an HTTP handler for updating metrics via POST requests.
 // URL pattern: /update/{type}/{name}/{value}
 // Supports only POST requests; validates the value type based on the metric type:

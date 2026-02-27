@@ -13,6 +13,8 @@ import (
 // This is the simplest storage implementation and serves as the foundation
 // for other storage types (like FileStorage which embeds MemStorage).
 // It's suitable for testing and scenarios where persistence is not required.
+//
+// generate:reset
 type MemStorage struct {
 	// gauge stores floating-point metrics with their names as keys
 	gauge map[string]float64

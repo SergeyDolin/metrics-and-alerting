@@ -22,6 +22,8 @@ import (
 //	{"id":"PollCount","type":"counter","delta":10}
 //
 // ]
+//
+// generate:reset
 type FileStorage struct {
 	*MemStorage            // Embedded in-memory storage for fast access
 	filePath    string     // Path to the JSON file for persistence
