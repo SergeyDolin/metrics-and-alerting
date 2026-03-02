@@ -2,127 +2,162 @@ package main
 
 import (
 	"fmt"
-	"math/rand"
+	"log"
 	"net/http"
-	"runtime"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
+
+	_ "net/http/pprof" // Import for side effects: enables pprof profiling endpoints
 )
 
-type Metrics struct {
-	ID    string   `json:"id"`
-	MType string   `json:"type"`
-	Delta *int64   `json:"delta,omitempty"`
-	Value *float64 `json:"value,omitempty"`
-}
+// Build information variables - set during compilation with ldflags
+var (
+	// buildVersion contains the version of the build (e.g., "1.0.0")
+	buildVersion string = "N/A"
 
-type MetricStorage struct {
-	gauge   map[string]float64
-	counter map[string]int64
-}
+	// buildDate contains the date when the build was created (e.g., "2025-02-27T10:00:00Z")
+	buildDate string = "N/A"
 
-func createMetricStorage() *MetricStorage {
-	return &MetricStorage{
-		gauge:   make(map[string]float64),
-		counter: make(map[string]int64),
+	// buildCommit contains the git commit hash of the source code
+	buildCommit string = "N/A"
+)
+
+// printBuildInfo displays build version information on application startup.
+func printBuildInfo() {
+	if buildVersion == "" {
+		buildVersion = "N/A"
 	}
-}
-
-var fieldMap = map[string]func(*runtime.MemStats) float64{
-	"Alloc":         func(m *runtime.MemStats) float64 { return float64(m.Alloc) },
-	"BuckHashSys":   func(m *runtime.MemStats) float64 { return float64(m.BuckHashSys) },
-	"Frees":         func(m *runtime.MemStats) float64 { return float64(m.Frees) },
-	"GCCPUFraction": func(m *runtime.MemStats) float64 { return float64(m.GCCPUFraction) },
-	"GCSys":         func(m *runtime.MemStats) float64 { return float64(m.GCSys) },
-	"HeapAlloc":     func(m *runtime.MemStats) float64 { return float64(m.HeapAlloc) },
-	"HeapIdle":      func(m *runtime.MemStats) float64 { return float64(m.HeapIdle) },
-	"HeapObjects":   func(m *runtime.MemStats) float64 { return float64(m.HeapObjects) },
-	"HeapReleased":  func(m *runtime.MemStats) float64 { return float64(m.HeapReleased) },
-	"HeapSys":       func(m *runtime.MemStats) float64 { return float64(m.HeapSys) },
-	"LastGC":        func(m *runtime.MemStats) float64 { return float64(m.LastGC) },
-	"Lookups":       func(m *runtime.MemStats) float64 { return float64(m.Lookups) },
-	"MCacheInuse":   func(m *runtime.MemStats) float64 { return float64(m.MCacheInuse) },
-	"MCacheSys":     func(m *runtime.MemStats) float64 { return float64(m.MCacheSys) },
-	"MSpanSys":      func(m *runtime.MemStats) float64 { return float64(m.MSpanSys) },
-	"Mallocs":       func(m *runtime.MemStats) float64 { return float64(m.Mallocs) },
-	"NextGC":        func(m *runtime.MemStats) float64 { return float64(m.NextGC) },
-	"NumForcedGC":   func(m *runtime.MemStats) float64 { return float64(m.NumForcedGC) },
-	"NumGC":         func(m *runtime.MemStats) float64 { return float64(m.NumGC) },
-	"OtherSys":      func(m *runtime.MemStats) float64 { return float64(m.OtherSys) },
-	"PauseTotalNs":  func(m *runtime.MemStats) float64 { return float64(m.PauseTotalNs) },
-	"StackInuse":    func(m *runtime.MemStats) float64 { return float64(m.StackInuse) },
-	"Sys":           func(m *runtime.MemStats) float64 { return float64(m.Sys) },
-	"TotalAlloc":    func(m *runtime.MemStats) float64 { return float64(m.TotalAlloc) },
-	"HeapInuse":     func(m *runtime.MemStats) float64 { return float64(m.HeapInuse) },
-	"MSpanInuse":    func(m *runtime.MemStats) float64 { return float64(m.MSpanInuse) },
-	"StackSys":      func(m *runtime.MemStats) float64 { return float64(m.StackSys) },
-}
-
-func (ms *MetricStorage) getMetrics(m *runtime.MemStats) {
-	for name, metric := range fieldMap {
-		ms.gauge[name] = metric(m)
+	if buildDate == "" {
+		buildDate = "N/A"
 	}
-	ms.counter["PollCount"]++
-	ms.gauge["RandomValue"] = rand.Float64()
+	if buildCommit == "" {
+		buildCommit = "N/A"
+	}
+
+	fmt.Printf("Build version: %s\n", buildVersion)
+	fmt.Printf("Build date: %s\n", buildDate)
+	fmt.Printf("Build commit: %s\n", buildCommit)
+	fmt.Println()
 }
 
+// main is the entry point for the metrics collection agent.
+// It initializes and runs the agent that periodically collects system and runtime metrics,
+// queues them for processing, and sends them to a monitoring server.
+//
+// The agent performs the following key functions:
+//  1. Starts a pprof profiling server for debugging and performance analysis
+//  2. Parses configuration from command-line flags and environment variables
+//  3. Initializes a metric queue and worker pool for concurrent metric processing
+//  4. Runs a metric collection loop that gathers runtime and system metrics
+//  5. Handles graceful shutdown on SIGINT and SIGTERM signals
+//
+// The agent continues running until it receives a termination signal,
+// at which point it ensures all queued metrics are processed before exiting.
 func main() {
+	// Print build information on startup for debugging and traceability
+	printBuildInfo()
+	// Start pprof profiling server in a separate goroutine
+	// This provides performance profiling endpoints at http://localhost:8081/debug/pprof/
+	go func() {
+		log.Println("pprof server started on :8081")
+		log.Println(http.ListenAndServe("localhost:8081", nil))
+	}()
+
+	// Initialize HTTP client for sending metrics to the server
 	client := http.Client{}
 
+	// Parse configuration from flags and environment variables
 	parseArgs()
-	ms := createMetricStorage()
 
-	serverAddr := *sAddr
+	// Create a buffered queue for metrics with capacity of 100 items
+	// This queue acts as a buffer between metric collection and sending
+	queue := NewMetricQueue(100)
 
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	pollInterval := time.Duration(*pInterval) * time.Second
-	reportInterval := time.Duration(*rInterval) * time.Second
-	lastReport := time.Now()
+	// Create and start a worker pool for concurrent metric processing
+	// The pool size is determined by the rateLimit configuration
+	pool := NewWorkerPool(*rateLimit, queue, &client, *sAddr)
+	pool.Start()
 
-	ms.getMetrics(&m)
+	// Start metric collection goroutine
+	// This loop runs continuously, collecting metrics at the specified poll interval
+	go func() {
+		// Convert poll interval from seconds to time.Duration
+		pollInterval := time.Duration(*pInterval) * time.Second
 
-	for {
-		time.Sleep(pollInterval)
-		runtime.ReadMemStats(&m)
-		ms.getMetrics(&m)
+		// Initialize counter for PollCount metric
+		counter := int64(0)
 
-		if time.Since(lastReport) >= reportInterval {
-			var batch []Metrics
-			for name, v := range ms.gauge {
-				batch = append(batch, Metrics{ID: name, MType: "gauge", Value: &v})
+		// Pre-allocate maps for metrics to reduce allocations during collection
+		runtimeMetrics := make(map[string]float64, 30) // Runtime metrics like MemStats
+		systemMetrics := make(map[string]float64, 5)   // System metrics like CPU, memory
+
+		// Infinite collection loop
+		for {
+			// Wait for the next poll interval
+			time.Sleep(pollInterval)
+
+			// Collect Go runtime metrics (MemStats, etc.)
+			CollectRuntimeMetrics(runtimeMetrics)
+
+			// Collect system-level metrics (CPU, memory usage, etc.)
+			CollectSystemMetrics(systemMetrics)
+
+			// Increment PollCount counter for each collection cycle
+			counter++
+
+			// Queue all runtime gauge metrics for sending
+			for name, value := range runtimeMetrics {
+				queue.Push(Metrics{
+					ID:    name,
+					MType: "gauge",
+					Value: &value,
+				})
 			}
-			for name, d := range ms.counter {
-				batch = append(batch, Metrics{ID: name, MType: "counter", Delta: &d})
+
+			// Queue all system gauge metrics for sending
+			for name, value := range systemMetrics {
+				queue.Push(Metrics{
+					ID:    name,
+					MType: "gauge",
+					Value: &value,
+				})
 			}
 
-			err := retryWithBackoff(func() error {
-				return sendBatchJSON(&client, batch, serverAddr)
+			// Queue the PollCount counter metric
+			queue.Push(Metrics{
+				ID:    "PollCount",
+				MType: "counter",
+				Delta: &counter,
 			})
-			if err != nil {
-				fmt.Printf("Batch send failed after reties: %v\n", err)
-				for _, m := range batch {
-					mR := m
-					retryErr := retryWithBackoff(func() error {
-						if mR.MType == "gauge" {
-							return sendMetricJSON(&client, mR.ID, mR.MType, serverAddr, mR.Value, nil)
-						} else {
-							return sendMetricJSON(&client, mR.ID, mR.MType, serverAddr, nil, mR.Delta)
-						}
-					})
-					if retryErr != nil {
-						fmt.Printf("Failed to send metric %s: %v\n", mR.ID, retryErr)
-					}
-				}
-			} else {
-				for _, m := range batch {
-					if m.MType == "gauge" {
-						sendMetricJSON(&client, m.ID, m.MType, serverAddr, m.Value, nil)
-					} else {
-						sendMetricJSON(&client, m.ID, m.MType, serverAddr, nil, m.Delta)
-					}
-				}
-			}
-			lastReport = time.Now()
 		}
+	}()
+
+	// Set up signal handling for graceful shutdown
+	// Create a channel to receive OS signals
+	sigChan := make(chan os.Signal, 1)
+	// Notify the channel on SIGINT (Ctrl+C) and SIGTERM (termination signal)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Block until a signal is received
+	<-sigChan
+	log.Printf("Shutdown signal received, waiting for workers to finish.")
+
+	// Stop the worker pool - no new metrics will be processed
+	pool.Stop()
+
+	// Allow time for in-flight requests to complete
+	time.Sleep(time.Duration(*pInterval) * time.Second)
+
+	// Process any remaining metrics in the queue synchronously
+	// This ensures no metrics are lost during shutdown
+	for !queue.IsEmpty() {
+		metric := queue.Pop()
+		// Send each remaining metric directly (bypassing the worker pool)
+		sendMetricJSON(&client, metric.ID, metric.MType, *sAddr, metric.Value, metric.Delta)
 	}
+
+	// Log completion and exit
+	log.Println("Agent shutdown complete.")
 }

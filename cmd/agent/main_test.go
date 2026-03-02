@@ -15,6 +15,7 @@ import (
 )
 
 func Test_sendMetric(t *testing.T) {
+	// sendMetric не имеет тела → не использует подпись → тест без изменений
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "text/plain", r.Header.Get("Content-Type"))
