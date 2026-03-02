@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/SergeyDolin/metrics-and-alerting/internal/config"
 )
 
 // Server configuration variables that can be set via command-line flags
@@ -56,6 +58,10 @@ var (
 	// flagCryptoKey specifies the path to the private key file for asymmetric encryption.
 	// Can be set via flag "-crypto-key" or environment variable "CRYPTO_KEY"
 	flagCryptoKey string
+
+	// flagConfigPath specifies the path to the configuration file
+	// Can be set via flag "-c" or "-config" or environment variable "CONFIG"
+	flagConfigPath string
 )
 
 // parseFlags processes command-line arguments and environment variables
@@ -109,6 +115,10 @@ func parseFlags() {
 
 	// Path to private key for asymmetric encryption (empty by default, meaning no encryption)
 	flag.StringVar(&flagCryptoKey, "crypto-key", "", "path to private key file for encryption")
+
+	// Path to configuration file (empty by default, meaning no config file is used)
+	flag.StringVar(&flagConfigPath, "c", "", "path to config file")
+	flag.StringVar(&flagConfigPath, "config", "", "path to config file (alternative flag)")
 
 	// Parse all defined command-line flags
 	flag.Parse()
@@ -177,5 +187,41 @@ func parseFlags() {
 		flagCryptoKey = cryptoKey
 	} else {
 		log.Printf("CRYPTO_KEY not set")
+	}
+
+	// Load configuration from file if provided
+	configPath := flagConfigPath
+	if envConfigPath := os.Getenv("CONFIG"); envConfigPath != "" {
+		configPath = envConfigPath
+	}
+
+	if configPath != "" {
+		serverConfig, err := config.LoadServerConfig(configPath)
+		if err == nil {
+			// Apply config values only if not already set by flags or environment variables
+			if flagRunAddr == "localhost:8080" {
+				flagRunAddr = serverConfig.Address
+			}
+			if flagStoreInterval == 300*time.Second {
+				storeInterval, err := time.ParseDuration(serverConfig.StoreInterval)
+				if err == nil {
+					flagStoreInterval = storeInterval
+				}
+			}
+			if flagFileStoragePath == "/tmp/metrics.json" {
+				flagFileStoragePath = serverConfig.StoreFile
+			}
+			if !flagRestore {
+				flagRestore = serverConfig.Restore
+			}
+			if flagSQL == "" {
+				flagSQL = serverConfig.DatabaseDSN
+			}
+			if flagCryptoKey == "" {
+				flagCryptoKey = serverConfig.CryptoKey
+			}
+		} else {
+			log.Printf("Failed to load config file: %v", err)
+		}
 	}
 }

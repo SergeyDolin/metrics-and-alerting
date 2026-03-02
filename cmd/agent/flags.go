@@ -5,6 +5,9 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
+
+	"github.com/SergeyDolin/metrics-and-alerting/internal/config"
 )
 
 // Command-line flags and environment variables configuration for the metrics agent.
@@ -41,6 +44,12 @@ var (
 	// Can be set via command-line flag "-crypto-key" or environment variable "CRYPTO_KEY".
 	// Default value: empty string (no encryption)
 	cryptoKey = flag.String("crypto-key", "", "path to public key file for encryption")
+
+	// configPath specifies the path to the configuration file
+	// Can be set via command-line flag "-c" or "-config" or environment variable "CONFIG".
+	// Default value: empty string (no config file)
+	configPath = flag.String("c", "", "path to config file")
+	_          = flag.String("config", "", "path to config file (alternative flag)")
 )
 
 // parseArgs processes command-line arguments and environment variables to configure the agent.
@@ -118,5 +127,38 @@ func parseArgs() {
 		*cryptoKey = cryptoKeyOs
 	} else {
 		log.Printf("%s not set\n", cryptoKeyOs)
+	}
+
+	// Load configuration from file if provided
+	configFilePath := *configPath
+	if envConfigPath := os.Getenv("CONFIG"); envConfigPath != "" {
+		configFilePath = envConfigPath
+	}
+
+	if configFilePath != "" {
+		agentConfig, err := config.LoadAgentConfig(configFilePath)
+		if err == nil {
+			// Apply config values only if not already set by flags or environment variables
+			if *sAddr == "localhost:8080" {
+				*sAddr = agentConfig.Address
+			}
+			if *rInterval == 10 {
+				reportInterval, err := time.ParseDuration(agentConfig.ReportInterval)
+				if err == nil {
+					*rInterval = int(reportInterval.Seconds())
+				}
+			}
+			if *pInterval == 2 {
+				pollInterval, err := time.ParseDuration(agentConfig.PollInterval)
+				if err == nil {
+					*pInterval = int(pollInterval.Seconds())
+				}
+			}
+			if *cryptoKey == "" {
+				*cryptoKey = agentConfig.CryptoKey
+			}
+		} else {
+			log.Printf("Failed to load config file: %v", err)
+		}
 	}
 }
