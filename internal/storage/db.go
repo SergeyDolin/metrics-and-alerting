@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
@@ -10,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
+	"github.com/sethvargo/go-retry"
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
 	"github.com/SergeyDolin/metrics-and-alerting/internal/pgerrors"
@@ -31,22 +34,24 @@ type DBStorage struct {
 	conn  *pgx.Conn    // PostgreSQL connection
 	cache *MemStorage  // In-memory cache for fast reads
 	mu    sync.RWMutex // Mutex for thread-safe cache operations
+	dsn   string       // Database connection string (for migrations)
 }
 
 // NewDBStorage creates and initializes a new DBStorage instance.
 // It performs the following steps:
 //  1. Establishes a connection to the PostgreSQL database using the provided DSN
-//  2. Initializes the database schema (creates tables if they don't exist)
+//  2. Ensures the database schema is up-to-date using migrations
 //  3. Loads existing metrics from the database into the in-memory cache
 //
 // Parameters:
+//   - ctx: Context for the operation
 //   - dsn: PostgreSQL connection string (e.g., "postgres://user:pass@localhost:5432/metrics")
 //
 // Returns:
 //   - *DBStorage: Initialized database storage
 //   - error: Any error during connection, schema initialization, or data loading
-func NewDBStorage(dsn string) (*DBStorage, error) {
-	conn, err := pgx.Connect(context.Background(), dsn)
+func NewDBStorage(ctx context.Context, dsn string) (*DBStorage, error) {
+	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to DB: %w", err)
 	}
@@ -54,21 +59,51 @@ func NewDBStorage(dsn string) (*DBStorage, error) {
 	s := &DBStorage{
 		conn:  conn,
 		cache: NewMemStorage(),
+		dsn:   dsn,
 	}
 
-	// Initialize database schema (create tables if needed)
-	if err := s.initSchema(); err != nil {
-		conn.Close(context.Background())
-		return nil, fmt.Errorf("init schema: %w", err)
+	// Ensure database schema is up-to-date using migrations
+	if err := s.runMigrations(ctx); err != nil {
+		conn.Close(ctx)
+		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 
 	// Load existing data from database into cache
-	if err := s.loadFromDB(); err != nil {
-		conn.Close(context.Background())
+	if err := s.loadFromDB(ctx); err != nil {
+		conn.Close(ctx)
 		return nil, fmt.Errorf("load from DB: %w", err)
 	}
 
 	return s, nil
+}
+
+// runMigrations executes database schema migrations using the goose migration tool.
+// It applies all pending migrations from the "migrations" directory to bring the
+// database schema up to date with the current version of the application.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//
+// Returns:
+//   - error: nil if migrations run successfully or no migrations are pending,
+//     otherwise an error describing what went wrong
+func (s *DBStorage) runMigrations(ctx context.Context) error {
+	sqlDB, err := sql.Open("pgx", s.dsn)
+	if err != nil {
+		return fmt.Errorf("failed to open connection for migrations: %w", err)
+	}
+	defer sqlDB.Close()
+
+	if err := sqlDB.PingContext(ctx); err != nil {
+		return fmt.Errorf("failed to ping migration connection: %w", err)
+	}
+
+	goose.SetLogger(goose.NopLogger())
+	if err := goose.SetDialect("postgres"); err != nil {
+		return fmt.Errorf("failed to set database dialect: %w", err)
+	}
+
+	return goose.UpContext(ctx, sqlDB, "migrations")
 }
 
 // initSchema creates the required database tables if they don't already exist.
@@ -96,11 +131,14 @@ func (s *DBStorage) initSchema() error {
 // This is called during initialization to ensure the cache reflects the current
 // database state.
 //
+// Parameters:
+//   - ctx: Context for the operation
+//
 // Returns:
 //   - error: Any error during query execution or scanning
-func (s *DBStorage) loadFromDB() error {
+func (s *DBStorage) loadFromDB(ctx context.Context) error {
 	// Load all gauge metrics
-	rows, err := s.conn.Query(context.Background(), `SELECT name, value FROM gauge`)
+	rows, err := s.conn.Query(ctx, `SELECT name, value FROM gauge`)
 	if err != nil {
 		return fmt.Errorf("query gauge: %w", err)
 	}
@@ -115,7 +153,7 @@ func (s *DBStorage) loadFromDB() error {
 	}
 
 	// Load all counter metrics
-	rows, err = s.conn.Query(context.Background(), `SELECT name, value FROM counter`)
+	rows, err = s.conn.Query(ctx, `SELECT name, value FROM counter`)
 	if err != nil {
 		return fmt.Errorf("query counter: %w", err)
 	}
@@ -132,8 +170,8 @@ func (s *DBStorage) loadFromDB() error {
 }
 
 // execWithRetry executes a database query with retry logic for transient errors.
-// It uses a PostgresErrorClassifier to identify retriable errors (like connection issues,
-// deadlocks, etc.) and retries with exponential backoff.
+// It uses the go-retry library to implement exponential backoff retry strategy
+// for handling transient database errors (like connection issues, deadlocks, etc.).
 //
 // Parameters:
 //   - ctx: Context for the operation
@@ -143,64 +181,65 @@ func (s *DBStorage) loadFromDB() error {
 // Returns:
 //   - error: nil if successful, otherwise the last error encountered
 func (s *DBStorage) execWithRetry(ctx context.Context, query string, args ...interface{}) error {
-	classifier := pgerrors.NewPostgresErrorClassifier()
-	delays := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
+	backoff := retry.WithMaxRetries(3, retry.NewExponential(1*time.Second))
 
-	var err error
-	for attempt := 0; attempt <= len(delays); attempt++ {
-		_, err = s.conn.Exec(ctx, query, args...)
+	return retry.Do(ctx, backoff, func(ctx context.Context) error {
+		_, err := s.conn.Exec(ctx, query, args...)
 		if err == nil {
 			return nil
 		}
 
+		// Check if the error is retriable using the PostgresErrorClassifier
+		classifier := pgerrors.NewPostgresErrorClassifier()
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && classifier.Classify(err) == pgerrors.Retriable {
-			if attempt < len(delays) {
-				time.Sleep(delays[attempt])
-				continue
-			}
+			return retry.RetryableError(err)
 		}
+
 		return err
-	}
-	return err
+	})
 }
 
 // UpdateGauge updates or creates a gauge metric with the given name and value.
-// The operation is atomic and updates both the database and in-memory cache.
+// The operation is atomic and updates the database.
 //
 // Parameters:
+//   - ctx: Context for the operation
 //   - name: Metric name
 //   - value: New gauge value
 //
 // Returns:
 //   - error: Any error during database operation
-func (s *DBStorage) UpdateGauge(name string, value float64) error {
+func (s *DBStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	query := `INSERT INTO gauge (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`
-	if err := s.execWithRetry(context.Background(), query, name, value); err != nil {
+	if err := s.execWithRetry(ctx, query, name, value); err != nil {
 		return fmt.Errorf("save gauge %s: %w", name, err)
 	}
+
+	// Update cache to maintain consistency with database
 	s.cache.gauge[name] = value
 	return nil
 }
 
 // UpdateCounter increments a counter metric by the given delta.
-// The operation adds the delta to the existing value in the database and cache.
+// The operation adds the delta to the existing value in the database.
 //
 // Parameters:
+//   - ctx: Context for the operation
 //   - name: Metric name
 //   - delta: Amount to increment by
 //
 // Returns:
 //   - error: Any error during database operation
-func (s *DBStorage) UpdateCounter(name string, delta int64) error {
+func (s *DBStorage) UpdateCounter(ctx context.Context, name string, delta int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	query := `INSERT INTO counter (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = counter.value + $2`
-	if err := s.execWithRetry(context.Background(), query, name, delta); err != nil {
+	if err := s.execWithRetry(ctx, query, name, delta); err != nil {
 		return fmt.Errorf("save counter %s: %w", name, err)
 	}
 
@@ -212,17 +251,18 @@ func (s *DBStorage) UpdateCounter(name string, delta int64) error {
 // Unlike UpdateCounter which increments, this sets the exact value.
 //
 // Parameters:
+//   - ctx: Context for the operation
 //   - name: Metric name
 //   - value: New absolute value
 //
 // Returns:
 //   - error: Any error during database operation
-func (s *DBStorage) SetCounter(name string, value int64) error {
+func (s *DBStorage) SetCounter(ctx context.Context, name string, value int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	query := `INSERT INTO counter (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`
-	if err := s.execWithRetry(context.Background(), query, name, value); err != nil {
+	if err := s.execWithRetry(ctx, query, name, value); err != nil {
 		return fmt.Errorf("set counter %s: %w", name, err)
 	}
 	s.cache.counter[name] = value
@@ -232,17 +272,18 @@ func (s *DBStorage) SetCounter(name string, value int64) error {
 // SaveCounterValue is an alias for SetCounter, provided for backward compatibility.
 //
 // Parameters:
+//   - ctx: Context for the operation
 //   - name: Metric name
 //   - value: New absolute value
 //
 // Returns:
 //   - error: Any error during database operation
-func (s *DBStorage) SaveCounterValue(name string, value int64) error {
+func (s *DBStorage) SaveCounterValue(ctx context.Context, name string, value int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	_, err := s.conn.Exec(
-		context.Background(),
+		ctx,
 		`INSERT INTO counter (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = $2`,
 		name, value,
 	)
@@ -256,9 +297,12 @@ func (s *DBStorage) SaveCounterValue(name string, value int64) error {
 // SaveAll persists all metrics from the in-memory cache to the database in a batch operation.
 // This is useful for periodic backups or during shutdown.
 //
+// Parameters:
+//   - ctx: Context for the operation
+//
 // Returns:
 //   - error: First error encountered during batch execution, or nil if successful
-func (s *DBStorage) SaveAll() error {
+func (s *DBStorage) SaveAll(ctx context.Context) error {
 	s.mu.RLock()
 	gauges := make(map[string]float64)
 	counters := make(map[string]int64)
@@ -292,7 +336,7 @@ func (s *DBStorage) SaveAll() error {
 	}
 
 	// Execute batch and collect errors
-	results := s.conn.SendBatch(context.Background(), batch)
+	results := s.conn.SendBatch(ctx, batch)
 	defer results.Close()
 
 	var firstErr error

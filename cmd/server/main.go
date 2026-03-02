@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -92,19 +93,22 @@ func main() {
 	if flagSQL != "" {
 		// PostgreSQL database storage
 		sugar.Infof("Initializing PostgreSQL storage with DSN: %s", flagSQL)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 
-		dbStorage, err := storage.NewDBStorage(flagSQL)
+		dbStorage, err := storage.NewDBStorage(ctx, flagSQL)
 		if err != nil {
 			sugar.Fatalf("Failed to open DB connection: %v", err)
 		}
+		store = dbStorage
 		// Ensure database connection is properly closed on exit
 		defer func() {
-			if err := dbStorage.SaveAll(); err != nil {
+			if err := dbStorage.SaveAll(ctx); err != nil {
 				sugar.Errorf("Failed to save metrics on exit: %v", err)
 			}
 			dbStorage.Close()
 		}()
-		store = dbStorage
+
 		// Database storage persists immediately, no sync function needed
 		saveSync = func() {}
 	} else {
@@ -181,10 +185,10 @@ func main() {
 
 	// Initialize all handler functions
 	indexHandlerFunc := indexHandler(store)
-	updateJSONHandlerFunc := updateJSONHandler(store, saveSync, auditPublisher)
-	updatesBatchHandlerFunc := updatesBatchHandler(store, saveSync, auditPublisher)
+	updateJSONHandlerFunc := updateJSONHandler(context.Background(), store, saveSync, auditPublisher)
+	updatesBatchHandlerFunc := updatesBatchHandler(context.Background(), store, saveSync, auditPublisher)
 	valueJSONHandlerFunc := valueJSONHandler(store, auditPublisher)
-	postHandlerFunc := postHandler(store, saveSync, auditPublisher)
+	postHandlerFunc := postHandler(context.Background(), store, saveSync, auditPublisher)
 	getHandlerFunc := getHandler(store, auditPublisher)
 	pingSQLHandlerFunc := pingSQLHandler(store)
 

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"sync"
@@ -60,9 +61,9 @@ func NewFileStorage(filePath string) (*FileStorage, error) {
 //
 // Returns:
 //   - error: Any error during in-memory update or file save
-func (s *FileStorage) UpdateGauge(name string, value float64) error {
+func (s *FileStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
 	// Update in-memory storage first
-	if err := s.MemStorage.UpdateGauge(name, value); err != nil {
+	if err := s.MemStorage.UpdateGauge(ctx, name, value); err != nil {
 		return err
 	}
 	// Persist to disk synchronously
@@ -78,9 +79,9 @@ func (s *FileStorage) UpdateGauge(name string, value float64) error {
 //
 // Returns:
 //   - error: Any error during in-memory update or file save
-func (s *FileStorage) UpdateCounter(name string, delta int64) error {
+func (s *FileStorage) UpdateCounter(ctx context.Context, name string, delta int64) error {
 	// Update in-memory storage first
-	if err := s.MemStorage.UpdateCounter(name, delta); err != nil {
+	if err := s.MemStorage.UpdateCounter(ctx, name, delta); err != nil {
 		return err
 	}
 	// Persist to disk synchronously
@@ -96,9 +97,9 @@ func (s *FileStorage) UpdateCounter(name string, delta int64) error {
 //
 // Returns:
 //   - error: Any error during in-memory update or file save
-func (s *FileStorage) SetCounter(name string, value int64) error {
+func (s *FileStorage) SetCounter(ctx context.Context, name string, value int64) error {
 	// Update in-memory storage first
-	if err := s.MemStorage.SetCounter(name, value); err != nil {
+	if err := s.MemStorage.SetCounter(ctx, name, value); err != nil {
 		return err
 	}
 	// Persist to disk synchronously
