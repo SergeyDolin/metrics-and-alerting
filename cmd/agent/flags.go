@@ -36,6 +36,11 @@ var (
 	// Can be set via command-line flag "-l" or environment variable "RATE_LIMIT".
 	// Default value: 1 (single concurrent request)
 	rateLimit = flag.Int("l", 1, "rate limit set")
+
+	// cryptoKey specifies the path to the public key file for asymmetric encryption.
+	// Can be set via command-line flag "-crypto-key" or environment variable "CRYPTO_KEY".
+	// Default value: empty string (no encryption)
+	cryptoKey = flag.String("crypto-key", "", "path to public key file for encryption")
 )
 
 // parseArgs processes command-line arguments and environment variables to configure the agent.
@@ -48,6 +53,7 @@ var (
 //   - REPORT_INTERVAL: Overrides the reporting interval (overrides -r flag)
 //   - KEY: Overrides the HMAC secret key (overrides -k flag)
 //   - RATE_LIMIT: Overrides the rate limit (overrides -l flag)
+//   - CRYPTO_KEY: Overrides the path to the public key file (overrides -crypto-key flag)
 //
 // The function logs warnings when:
 //   - Environment variables are not set (informational)
@@ -105,5 +111,12 @@ func parseArgs() {
 		}
 	} else {
 		log.Printf("%s not set\n", rateLim)
+	}
+
+	// Override crypto key path from environment variable if provided
+	if cryptoKeyOs, ok := os.LookupEnv("CRYPTO_KEY"); ok {
+		*cryptoKey = cryptoKeyOs
+	} else {
+		log.Printf("%s not set\n", cryptoKeyOs)
 	}
 }

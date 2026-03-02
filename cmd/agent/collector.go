@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/SergeyDolin/metrics-and-alerting/internal/crypto"
 	"github.com/SergeyDolin/metrics-and-alerting/internal/sha256"
 )
 
@@ -73,8 +74,26 @@ func sendRequest(client *http.Client, url string, body []byte) error {
 	buf.Reset()
 	defer bufferPool.Put(buf)
 
+	// Encrypt the body if crypto key is provided
+	var reqBody []byte
+	if *cryptoKey != "" {
+		publicKey, err := crypto.LoadRSAPublicKey(*cryptoKey)
+		if err != nil {
+			return fmt.Errorf("failed to load public key: %w", err)
+		}
+
+		encryptedBody, err := crypto.EncryptWithPublicKey(publicKey, body)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt request body: %w", err)
+		}
+
+		reqBody = encryptedBody
+	} else {
+		reqBody = body
+	}
+
 	gz := gzip.NewWriter(buf)
-	if _, err := gz.Write(body); err != nil {
+	if _, err := gz.Write(reqBody); err != nil {
 		gz.Close()
 		return fmt.Errorf("failed to compress body: %w", err)
 	}

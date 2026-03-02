@@ -52,6 +52,10 @@ var (
 	// Audit events are POSTed to this URL as JSON.
 	// Can be set via flag "-audit-url" or environment variable "AUDIT_URL"
 	flagAuditURL string
+
+	// flagCryptoKey specifies the path to the private key file for asymmetric encryption.
+	// Can be set via flag "-crypto-key" or environment variable "CRYPTO_KEY"
+	flagCryptoKey string
 )
 
 // parseFlags processes command-line arguments and environment variables
@@ -73,6 +77,7 @@ var (
 //   - KEY: HMAC secret key (overrides -k)
 //   - AUDIT_FILE: Path to audit log file (overrides -audit-file)
 //   - AUDIT_URL: URL for audit log endpoint (overrides -audit-url)
+//   - CRYPTO_KEY: Path to private key file for asymmetric encryption (overrides -crypto-key)
 //
 // This function should be called early in the server initialization process,
 // typically right after the main() function starts.
@@ -101,6 +106,9 @@ func parseFlags() {
 
 	// Audit log URL (empty by default, meaning no HTTP-based audit logging)
 	flag.StringVar(&flagAuditURL, "audit-url", "", "URL to send audit logs")
+
+	// Path to private key for asymmetric encryption (empty by default, meaning no encryption)
+	flag.StringVar(&flagCryptoKey, "crypto-key", "", "path to private key file for encryption")
 
 	// Parse all defined command-line flags
 	flag.Parse()
@@ -162,5 +170,12 @@ func parseFlags() {
 		flagAuditURL = auditURL
 	} else {
 		log.Printf("AUDIT_URL not set")
+	}
+
+	// Override crypto key path from environment variable if provided
+	if cryptoKey, ok := os.LookupEnv("CRYPTO_KEY"); ok {
+		flagCryptoKey = cryptoKey
+	} else {
+		log.Printf("CRYPTO_KEY not set")
 	}
 }

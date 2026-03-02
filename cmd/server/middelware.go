@@ -10,6 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/SergeyDolin/metrics-and-alerting/internal/crypto"
 	"github.com/SergeyDolin/metrics-and-alerting/internal/sha256"
 )
 
@@ -235,10 +236,41 @@ func (w *conditionalGzipResponseWriter) WriteHeader(statusCode int) {
 //
 // If verification fails, it returns HTTP 400 Bad Request.
 //
+// If crypto key is configured (flagCryptoKey != ""), it:
+//  1. Reads the entire request body
+//  2. Decrypts the body using the private key
+//  3. Replaces the request body with a decrypted reader for downstream handlers
+//
 // Returns:
 //   - func(http.Handler) http.Handler: Middleware function
 func hashVerificationMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// First, handle decryption if crypto key is configured
+		if flagCryptoKey != "" {
+			// Read the entire request body
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "Failed to read request body", http.StatusBadRequest)
+				return
+			}
+
+			privateKey, err := crypto.LoadRSAPrivateKey(flagCryptoKey)
+			if err != nil {
+				http.Error(w, "Failed to load private key", http.StatusInternalServerError)
+				return
+			}
+
+			decryptedBody, err := crypto.DecryptWithPrivateKey(privateKey, body)
+			if err != nil {
+				http.Error(w, "Failed to decrypt request body", http.StatusBadRequest)
+				return
+			}
+
+			// Replace the request body with the decrypted reader for downstream handlers
+			r.Body = io.NopCloser(bytes.NewReader(decryptedBody))
+		}
+
+		// Then, handle HMAC verification if key is configured
 		// Only verify if a key is configured
 		if flagKey != "" {
 			// Read the entire request body
