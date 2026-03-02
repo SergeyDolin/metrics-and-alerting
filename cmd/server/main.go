@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/storage"
@@ -210,6 +213,43 @@ func main() {
 	router.Post("/value", valueJSONHandlerFunc)                   // JSON metric retrieval
 	router.Post("/update/{type}/{name}/{value}", postHandlerFunc) // Legacy URL param update
 	router.Get("/value/{type}/{name}", getHandlerFunc)            // Legacy URL param retrieval
+
+	// Create a channel to receive OS signals
+	sigChan := make(chan os.Signal, 1)
+	// Notify the channel on SIGINT (Ctrl+C), SIGTERM (termination signal), and SIGQUIT
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	// Start the HTTP server in a goroutine
+	srv := &http.Server{
+		Addr:    flagRunAddr,
+		Handler: router,
+	}
+	go func() {
+		sugar.Infof("Running server on %s", flagRunAddr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			sugar.Fatalf("Server failed to start: %v", err)
+		}
+	}()
+
+	// Block until a signal is received
+	<-sigChan
+	sugar.Info("Shutdown signal received")
+
+	// Create a context with timeout for graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Attempt to save all metrics before shutting down
+	if store != nil {
+		saveSync()
+	}
+
+	// Shutdown the server gracefully
+	if err := srv.Shutdown(ctx); err != nil {
+		sugar.Errorf("Server shutdown error: %v", err)
+	} else {
+		sugar.Info("Server shutdown complete")
+	}
 
 	// Start the HTTP server
 	sugar.Infof("Running server on %s", flagRunAddr)
