@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +11,26 @@ import (
 
 	_ "net/http/pprof" // Import for side effects: enables pprof profiling endpoints
 )
+
+// Build information variables - set during compilation with ldflags
+var (
+	// buildVersion contains the version of the build (e.g., "1.0.0")
+	buildVersion string = "N/A"
+
+	// buildDate contains the date when the build was created (e.g., "2025-02-27T10:00:00Z")
+	buildDate string = "N/A"
+
+	// buildCommit contains the git commit hash of the source code
+	buildCommit string = "N/A"
+)
+
+// printBuildInfo displays build version information on application startup.
+func printBuildInfo() {
+	fmt.Printf("Build version: %s\n", buildVersion)
+	fmt.Printf("Build date: %s\n", buildDate)
+	fmt.Printf("Build commit: %s\n", buildCommit)
+	fmt.Println()
+}
 
 // main is the entry point for the metrics collection agent.
 // It initializes and runs the agent that periodically collects system and runtime metrics,
@@ -25,6 +46,8 @@ import (
 // The agent continues running until it receives a termination signal,
 // at which point it ensures all queued metrics are processed before exiting.
 func main() {
+	// Print build information on startup for debugging and traceability
+	printBuildInfo()
 	// Start pprof profiling server in a separate goroutine
 	// This provides performance profiling endpoints at http://localhost:8081/debug/pprof/
 	go func() {

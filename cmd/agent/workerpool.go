@@ -17,6 +17,8 @@ import (
 // WorkerPool manages a pool of worker goroutines that process and send metrics
 // from a queue to the monitoring server. It provides controlled concurrency
 // with graceful shutdown capabilities.
+//
+// generate:reset
 type WorkerPool struct {
 	workers    int                // Number of concurrent worker goroutines
 	queue      *MetricQueue       // Shared queue containing metrics to be processed

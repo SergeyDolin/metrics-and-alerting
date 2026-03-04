@@ -12,6 +12,8 @@ import (
 // The struct supports two types of metrics:
 //   - gauge: A floating-point value that can go up and down (e.g., CPU usage, memory usage)
 //   - counter: A monotonically increasing integer value (e.g., request count, poll count)
+//
+// generate:reset
 type Metrics struct {
 	// ID is the unique identifier/name of the metric (e.g., "Alloc", "PollCount", "CPUUtilization")
 	ID string `json:"id"`
@@ -34,6 +36,8 @@ type Metrics struct {
 //
 // The queue includes a sync.Pool for Metrics object reuse to reduce garbage
 // collection pressure, though currently the pool is not actively used in Push/Pop.
+//
+// generate:reset
 type MetricQueue struct {
 	// queue is a buffered channel that holds metrics waiting to be processed
 	queue chan Metrics

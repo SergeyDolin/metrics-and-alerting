@@ -2,7 +2,11 @@
 // It supports multiple storage backends: in-memory, file-based, and PostgreSQL.
 package storage
 
-import "github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
+import (
+	"context"
+
+	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
+)
 
 // Storage defines the interface for metrics storage backends.
 // It provides methods for updating and retrieving both gauge and counter metrics.
@@ -40,7 +44,7 @@ type Storage interface {
 	//
 	// Returns:
 	//   - error: nil if successful, otherwise an error describing what went wrong
-	UpdateGauge(name string, value float64) error
+	UpdateGauge(ctx context.Context, name string, value float64) error
 
 	// UpdateCounter increments a counter metric by the given delta.
 	// Counter metrics represent monotonically increasing values (e.g., request count, poll count).
@@ -53,7 +57,7 @@ type Storage interface {
 	//
 	// Returns:
 	//   - error: nil if successful, otherwise an error describing what went wrong
-	UpdateCounter(name string, delta int64) error
+	UpdateCounter(ctx context.Context, name string, delta int64) error
 
 	// SetCounter sets a counter metric to an absolute value.
 	// Unlike UpdateCounter which increments, this method sets the exact value.
@@ -66,7 +70,7 @@ type Storage interface {
 	//
 	// Returns:
 	//   - error: nil if successful, otherwise an error describing what went wrong
-	SetCounter(name string, value int64) error
+	SetCounter(ctx context.Context, name string, value int64) error
 
 	// GetGauge retrieves the current value of a gauge metric.
 	//

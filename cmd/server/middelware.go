@@ -15,6 +15,8 @@ import (
 
 // responseData holds metadata about the HTTP response for logging purposes.
 // It tracks the status code and response size to be logged after request completion.
+//
+// generate:reset
 type responseData struct {
 	status int // HTTP status code of the response
 	size   int // Size of the response body in bytes
@@ -23,6 +25,8 @@ type responseData struct {
 // loggingResponseWriter is a wrapper around http.ResponseWriter that captures
 // response metadata for logging. It implements the http.ResponseWriter interface
 // and intercepts Write and WriteHeader calls to record status code and size.
+//
+// generate:reset
 type loggingResponseWriter struct {
 	http.ResponseWriter               // Embedded original ResponseWriter
 	responseData        *responseData // Pointer to store response metadata
@@ -168,6 +172,8 @@ func gzipMiddleware(next http.Handler) http.Handler {
 // conditionalGzipResponseWriter is a wrapper that conditionally compresses
 // responses with gzip. It waits until WriteHeader is called to determine
 // the Content-Type and decide whether compression is appropriate.
+//
+// generate:reset
 type conditionalGzipResponseWriter struct {
 	http.ResponseWriter              // Embedded original ResponseWriter
 	gz                  *gzip.Writer // Gzip writer, created only if compression is used
