@@ -13,6 +13,8 @@ import (
 // AuditEvent represents an audit log entry containing information about
 // when metrics were accessed and by whom. This is useful for compliance,
 // debugging, and monitoring access patterns.
+//
+// generate:reset
 type AuditEvent struct {
 	Timestamp int64    `json:"ts"`         // Unix timestamp when the event occurred
 	Metrics   []string `json:"metrics"`    // Names of metrics that were accessed
@@ -34,6 +36,8 @@ type Observer interface {
 // Publisher manages a collection of observers and broadcasts audit events
 // to all registered observers. It provides thread-safe registration and
 // notification capabilities.
+//
+// generate:reset
 type Publisher struct {
 	observers []Observer   // Slice of registered observers
 	mutex     sync.RWMutex // Mutex for thread-safe operations
@@ -97,6 +101,8 @@ func (p *Publisher) Close() {
 // FileWriterObserver implements the Observer interface by writing
 // audit events to a file in JSON format, one event per line.
 // This is useful for persistent audit logging and offline analysis.
+//
+// generate:reset
 type FileWriterObserver struct {
 	filePath string     // Path to the audit log file
 	mutex    sync.Mutex // Mutex to prevent concurrent file writes
@@ -165,6 +171,8 @@ func (fw *FileWriterObserver) Close() error {
 // HTTPSenderObserver implements the Observer interface by sending
 // audit events to a remote HTTP endpoint. This enables centralized
 // audit logging across multiple services.
+//
+// generate:reset
 type HTTPSenderObserver struct {
 	url    string       // HTTP endpoint URL for sending audit events
 	client *http.Client // HTTP client with configured timeout

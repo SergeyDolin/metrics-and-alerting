@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"sync"
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
@@ -13,6 +14,8 @@ import (
 // This is the simplest storage implementation and serves as the foundation
 // for other storage types (like FileStorage which embeds MemStorage).
 // It's suitable for testing and scenarios where persistence is not required.
+//
+// generate:reset
 type MemStorage struct {
 	// gauge stores floating-point metrics with their names as keys
 	gauge map[string]float64
@@ -46,7 +49,7 @@ func NewMemStorage() *MemStorage {
 //
 // Returns:
 //   - error: Always nil (kept for interface compatibility)
-func (s *MemStorage) UpdateGauge(name string, value float64) error {
+func (s *MemStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.gauge[name] = value
@@ -63,7 +66,7 @@ func (s *MemStorage) UpdateGauge(name string, value float64) error {
 //
 // Returns:
 //   - error: Always nil (kept for interface compatibility)
-func (s *MemStorage) UpdateCounter(name string, delta int64) error {
+func (s *MemStorage) UpdateCounter(ctx context.Context, name string, delta int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.counter[name] += delta
@@ -81,7 +84,7 @@ func (s *MemStorage) UpdateCounter(name string, delta int64) error {
 //
 // Returns:
 //   - error: Always nil (kept for interface compatibility)
-func (s *MemStorage) SetCounter(name string, value int64) error {
+func (s *MemStorage) SetCounter(ctx context.Context, name string, value int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.counter[name] = value
