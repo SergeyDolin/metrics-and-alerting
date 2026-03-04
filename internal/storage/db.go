@@ -94,10 +94,6 @@ func (s *DBStorage) runMigrations(ctx context.Context) error {
 	}
 	defer sqlDB.Close()
 
-	if err := sqlDB.PingContext(ctx); err != nil {
-		return fmt.Errorf("failed to ping migration connection: %w", err)
-	}
-
 	goose.SetLogger(goose.NopLogger())
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("failed to set database dialect: %w", err)
