@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/storage"
@@ -11,6 +15,26 @@ import (
 
 	"github.com/go-chi/chi/middleware"
 )
+
+// Build information variables - set during compilation with ldflags
+var (
+	// buildVersion contains the version of the build (e.g., "1.0.0")
+	buildVersion string = "N/A"
+
+	// buildDate contains the date when the build was created (e.g., "2025-02-27T10:00:00Z")
+	buildDate string = "N/A"
+
+	// buildCommit contains the git commit hash of the source code
+	buildCommit string = "N/A"
+)
+
+// printBuildInfo displays build version information on application startup.
+func printBuildInfo() {
+	fmt.Printf("Build version: %s\n", buildVersion)
+	fmt.Printf("Build date: %s\n", buildDate)
+	fmt.Printf("Build commit: %s\n", buildCommit)
+	fmt.Println()
+}
 
 // main is the entry point for the metrics collection server application.
 // It initializes the chi router, creates the appropriate metrics storage backend,
@@ -37,6 +61,8 @@ import (
 //   - Audit logging to file or HTTP endpoint when configured
 //   - Periodic or synchronous metric persistence to disk
 func main() {
+	// Print build information on startup for debugging and traceability
+	printBuildInfo()
 	// Parse configuration from command-line flags and environment variables
 	parseFlags()
 
@@ -59,19 +85,23 @@ func main() {
 	if flagSQL != "" {
 		// PostgreSQL database storage
 		sugar.Infof("Initializing PostgreSQL storage with DSN: %s", flagSQL)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 
-		dbStorage, err := storage.NewDBStorage(flagSQL)
+		dbStorage, err := storage.NewDBStorage(ctx, flagSQL)
 		if err != nil {
 			sugar.Fatalf("Failed to open DB connection: %v", err)
 		}
+		store = dbStorage
 		// Ensure database connection is properly closed on exit
 		defer func() {
-			if err := dbStorage.SaveAll(); err != nil {
+			cleanupCtx := context.Background()
+			if err := dbStorage.SaveAll(cleanupCtx); err != nil {
 				sugar.Errorf("Failed to save metrics on exit: %v", err)
 			}
 			dbStorage.Close()
 		}()
-		store = dbStorage
+
 		// Database storage persists immediately, no sync function needed
 		saveSync = func() {}
 	} else {
@@ -148,10 +178,10 @@ func main() {
 
 	// Initialize all handler functions
 	indexHandlerFunc := indexHandler(store)
-	updateJSONHandlerFunc := updateJSONHandler(store, saveSync, auditPublisher)
-	updatesBatchHandlerFunc := updatesBatchHandler(store, saveSync, auditPublisher)
+	updateJSONHandlerFunc := updateJSONHandler(context.Background(), store, saveSync, auditPublisher)
+	updatesBatchHandlerFunc := updatesBatchHandler(context.Background(), store, saveSync, auditPublisher)
 	valueJSONHandlerFunc := valueJSONHandler(store, auditPublisher)
-	postHandlerFunc := postHandler(store, saveSync, auditPublisher)
+	postHandlerFunc := postHandler(context.Background(), store, saveSync, auditPublisher)
 	getHandlerFunc := getHandler(store, auditPublisher)
 	pingSQLHandlerFunc := pingSQLHandler(store)
 
@@ -173,6 +203,42 @@ func main() {
 	router.Post("/value", valueJSONHandlerFunc)                   // JSON metric retrieval
 	router.Post("/update/{type}/{name}/{value}", postHandlerFunc) // Legacy URL param update
 	router.Get("/value/{type}/{name}", getHandlerFunc)            // Legacy URL param retrieval
+
+	// Create a context that will be canceled when a shutdown signal is received
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	defer stop()
+
+	// Start the HTTP server in a goroutine
+	srv := &http.Server{
+		Addr:    flagRunAddr,
+		Handler: router,
+	}
+	go func() {
+		sugar.Infof("Running server on %s", flagRunAddr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			sugar.Fatalf("Server failed to start: %v", err)
+		}
+	}()
+
+	// Block until a signal is received (context is canceled)
+	<-ctx.Done()
+	sugar.Info("Shutdown signal received")
+
+	// Create a context with timeout for graceful shutdown
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Attempt to save all metrics before shutting down
+	if store != nil {
+		saveSync()
+	}
+
+	// Shutdown the server gracefully
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		sugar.Errorf("Server shutdown error: %v", err)
+	} else {
+		sugar.Info("Server shutdown complete")
+	}
 
 	// Start the HTTP server
 	sugar.Infof("Running server on %s", flagRunAddr)

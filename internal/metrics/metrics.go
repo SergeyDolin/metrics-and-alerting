@@ -21,6 +21,8 @@ package metrics
 // Signed metric (with HMAC):
 //
 //	{"id":"Alloc","type":"gauge","value":42.5,"hash":"5d4f3c8e2a1b9f7d6c5e4a3b2c1d0e9f8a7b6c5d"}
+//
+// generate:reset
 type Metrics struct {
 	// ID is the unique identifier/name of the metric.
 	// Examples: "Alloc", "PollCount", "CPUUtilization1", "TotalMemory"

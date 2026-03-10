@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,7 +21,7 @@ func Example_postHandler_gauge() {
 	// Setup: Create a test server with in-memory storage
 	store := storage.NewMemStorage()
 	router := chi.NewRouter()
-	router.Post("/update/{type}/{name}/{value}", postHandler(store, func() {}, nil))
+	router.Post("/update/{type}/{name}/{value}", postHandler(context.Background(), store, func() {}, nil))
 
 	ts := httptest.NewServer(router)
 	defer ts.Close()
@@ -52,7 +53,7 @@ func Example_postHandler_counter() {
 	// Setup: Create a test server with in-memory storage
 	store := storage.NewMemStorage()
 	router := chi.NewRouter()
-	router.Post("/update/{type}/{name}/{value}", postHandler(store, func() {}, nil))
+	router.Post("/update/{type}/{name}/{value}", postHandler(context.Background(), store, func() {}, nil))
 
 	ts := httptest.NewServer(router)
 	defer ts.Close()
@@ -90,7 +91,7 @@ func Example_updateJSONHandler() {
 	// Setup: Create a test server with in-memory storage
 	store := storage.NewMemStorage()
 	router := chi.NewRouter()
-	router.Post("/update", updateJSONHandler(store, func() {}, nil))
+	router.Post("/update", updateJSONHandler(context.Background(), store, func() {}, nil))
 
 	ts := httptest.NewServer(router)
 	defer ts.Close()
@@ -134,7 +135,7 @@ func Example_updatesBatchHandler() {
 	// Setup: Create a test server with in-memory storage
 	store := storage.NewMemStorage()
 	router := chi.NewRouter()
-	router.Post("/updates", updatesBatchHandler(store, func() {}, nil))
+	router.Post("/updates", updatesBatchHandler(context.Background(), store, func() {}, nil))
 
 	ts := httptest.NewServer(router)
 	defer ts.Close()
@@ -189,8 +190,8 @@ func Example_updatesBatchHandler() {
 func Example_valueJSONHandler() {
 	// Setup: Create a test server with pre-populated storage
 	store := storage.NewMemStorage()
-	store.UpdateGauge("Alloc", 42.5)
-	store.UpdateCounter("PollCount", 10)
+	store.UpdateGauge(context.Background(), "Alloc", 42.5)
+	store.UpdateCounter(context.Background(), "PollCount", 10)
 
 	router := chi.NewRouter()
 	router.Post("/value", valueJSONHandler(store, nil))
@@ -229,7 +230,7 @@ func Example_valueJSONHandler() {
 func Example_getHandler() {
 	// Setup: Create a test server with pre-populated storage
 	store := storage.NewMemStorage()
-	store.UpdateGauge("Alloc", 42.5)
+	store.UpdateGauge(context.Background(), "Alloc", 42.5)
 
 	router := chi.NewRouter()
 	router.Get("/value/{type}/{name}", getHandler(store, nil))
@@ -261,9 +262,9 @@ func Example_getHandler() {
 func Example_indexHandler() {
 	// Setup: Create a test server with pre-populated storage
 	store := storage.NewMemStorage()
-	store.UpdateGauge("Alloc", 42.5)
-	store.UpdateGauge("CPUUsage", 75.5)
-	store.UpdateCounter("PollCount", 10)
+	store.UpdateGauge(context.Background(), "Alloc", 42.5)
+	store.UpdateGauge(context.Background(), "CPUUsage", 75.5)
+	store.UpdateCounter(context.Background(), "PollCount", 10)
 
 	router := chi.NewRouter()
 	router.Get("/", indexHandler(store))
@@ -295,7 +296,7 @@ func Example_workflow() {
 	router := chi.NewRouter()
 
 	// Register handlers
-	router.Post("/update", updateJSONHandler(store, func() {}, nil))
+	router.Post("/update", updateJSONHandler(context.Background(), store, func() {}, nil))
 	router.Post("/value", valueJSONHandler(store, nil))
 
 	ts := httptest.NewServer(router)

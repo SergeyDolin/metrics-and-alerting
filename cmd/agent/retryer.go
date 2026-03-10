@@ -10,6 +10,8 @@ import (
 // httpError represents a custom error type for HTTP-related failures.
 // It encapsulates both the HTTP status code and the response body message
 // to provide detailed context about why a request failed.
+//
+// generate:reset
 type httpError struct {
 	statusCode int    // HTTP status code returned by the server (e.g., 500, 502, 404)
 	msg        string // Response body content for additional error details

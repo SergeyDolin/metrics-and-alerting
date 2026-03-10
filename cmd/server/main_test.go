@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -107,7 +108,7 @@ func Test_postHandler(t *testing.T) {
 			router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Invalid path format", http.StatusNotFound)
 			})
-			router.Post("/update/{type}/{name}/{value}", postHandler(store, func() {}, nil))
+			router.Post("/update/{type}/{name}/{value}", postHandler(context.Background(), store, func() {}, nil))
 
 			req := httptest.NewRequest(tt.method, tt.url, nil)
 			rr := httptest.NewRecorder()
@@ -207,7 +208,7 @@ func Test_updateJSONHandler(t *testing.T) {
 			flagKey = ""
 			defer func() { flagKey = oldFlagKey }()
 
-			router.Post("/update", updateJSONHandler(store, func() {}, nil))
+			router.Post("/update", updateJSONHandler(context.Background(), store, func() {}, nil))
 
 			req := httptest.NewRequest(http.MethodPost, "/update", strings.NewReader(tt.jsonBody))
 			req.Header.Set("Content-Type", "application/json")
@@ -238,8 +239,8 @@ func Test_updateJSONHandler(t *testing.T) {
 
 func Test_valueJSONHandler(t *testing.T) {
 	store := storage.NewMemStorage()
-	store.UpdateGauge("Temperature", 25.5)
-	store.UpdateCounter("PollCount", 42)
+	store.UpdateGauge(t.Context(), "Temperature", 25.5)
+	store.UpdateCounter(t.Context(), "PollCount", 42)
 
 	router := chi.NewRouter()
 	oldFlagKey := flagKey
@@ -392,7 +393,7 @@ func Test_batchUpdateHandler(t *testing.T) {
 			flagKey = ""
 			defer func() { flagKey = oldFlagKey }()
 
-			router.Post("/updates", updatesBatchHandler(store, func() {}, nil))
+			router.Post("/updates", updatesBatchHandler(context.Background(), store, func() {}, nil))
 
 			req := httptest.NewRequest(http.MethodPost, "/updates", strings.NewReader(tt.jsonBody))
 			req.Header.Set("Content-Type", "application/json")
@@ -429,7 +430,7 @@ func Test_batchUpdateHandler_Gzip(t *testing.T) {
 	flagKey = ""
 	defer func() { flagKey = oldFlagKey }()
 
-	router.Post("/updates", updatesBatchHandler(store, func() {}, nil))
+	router.Post("/updates", updatesBatchHandler(context.Background(), store, func() {}, nil))
 
 	data := `[{"id": "GzipTest", "type": "gauge", "value": 42.0}]`
 	var buf bytes.Buffer
@@ -453,8 +454,8 @@ func Test_batchUpdateHandler_Gzip(t *testing.T) {
 
 func Test_getHandler(t *testing.T) {
 	store := storage.NewMemStorage()
-	store.UpdateGauge("Temperature", 25.5)
-	store.UpdateCounter("PollCount", 42)
+	store.UpdateGauge(t.Context(), "Temperature", 25.5)
+	store.UpdateCounter(t.Context(), "PollCount", 42)
 
 	router := chi.NewRouter()
 	router.Get("/value/{type}/{name}", getHandler(store, nil))
@@ -505,8 +506,8 @@ func Test_getHandler(t *testing.T) {
 
 func Test_indexHandler(t *testing.T) {
 	store := storage.NewMemStorage()
-	store.UpdateGauge("Temperature", 25.5)
-	store.UpdateCounter("PollCount", 42)
+	store.UpdateGauge(t.Context(), "Temperature", 25.5)
+	store.UpdateCounter(t.Context(), "PollCount", 42)
 
 	router := chi.NewRouter()
 	router.Get("/", indexHandler(store))
