@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -205,10 +204,9 @@ func main() {
 	router.Post("/update/{type}/{name}/{value}", postHandlerFunc) // Legacy URL param update
 	router.Get("/value/{type}/{name}", getHandlerFunc)            // Legacy URL param retrieval
 
-	// Create a channel to receive OS signals
-	sigChan := make(chan os.Signal, 1)
-	// Notify the channel on SIGINT (Ctrl+C), SIGTERM (termination signal), and SIGQUIT
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	// Create a context that will be canceled when a shutdown signal is received
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	defer stop()
 
 	// Start the HTTP server in a goroutine
 	srv := &http.Server{
@@ -222,12 +220,12 @@ func main() {
 		}
 	}()
 
-	// Block until a signal is received
-	<-sigChan
+	// Block until a signal is received (context is canceled)
+	<-ctx.Done()
 	sugar.Info("Shutdown signal received")
 
 	// Create a context with timeout for graceful shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Attempt to save all metrics before shutting down
@@ -236,7 +234,7 @@ func main() {
 	}
 
 	// Shutdown the server gracefully
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		sugar.Errorf("Server shutdown error: %v", err)
 	} else {
 		sugar.Info("Server shutdown complete")
