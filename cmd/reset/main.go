@@ -1,310 +1,144 @@
 package main
 
 import (
-	"bytes"
-	"fmt"
 	"go/ast"
-	"go/format"
-	"go/token"
-	"os"
-	"path/filepath"
-	"strings"
+	"go/types"
 
-	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/analysis/passes/inspect"
+	"golang.org/x/tools/go/ast/inspector"
 )
 
-// generationTarget represents a struct that needs a Reset() method generated.
-type generationTarget struct {
-	pkgPath    string
-	pkgName    string
-	structName string
-	structType *ast.StructType
-	fileSet    *token.FileSet
-	outputDir  string
+var Analyzer = &analysis.Analyzer{
+	Name:     "panicchecker",
+	Doc:      "reports calls to panic(), and log.Fatal/os.Exit outside of main.main",
+	Run:      run,
+	Requires: []*analysis.Analyzer{inspect.Analyzer},
 }
 
-func main() {
-	// Parse command line arguments
-	pattern := "./..."
-	if len(os.Args) > 1 {
-		pattern = os.Args[1]
+// run is the main analysis function.
+func run(pass *analysis.Pass) (interface{}, error) {
+	inspect := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+
+	// Precompute main function positions
+	mainFuncs := findMainFunctions(pass)
+
+	nodeFilter := []ast.Node{
+		(*ast.CallExpr)(nil),
 	}
 
-	fmt.Printf("Scanning packages with pattern: %s\n", pattern)
+	inspect.Preorder(nodeFilter, func(n ast.Node) {
+		call := n.(*ast.CallExpr)
 
-	// Configure package loading
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes,
-		Fset: token.NewFileSet(),
-	}
+		// Check for panic
+		checkPanic(pass, call)
 
-	// Load packages
-	pkgs, err := packages.Load(cfg, pattern)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading packages: %v\n", err)
-		os.Exit(1)
-	}
+		// Check for log.Fatal and os.Exit
+		checkFatalExit(pass, call, mainFuncs)
+	})
 
-	// Find all structs that need generation
-	targets := findStructsForGeneration(pkgs)
-
-	if len(targets) == 0 {
-		fmt.Println("No structs found with // generate:reset comment")
-		return
-	}
-
-	fmt.Printf("Found %d structs to generate Reset() methods\n", len(targets))
-
-	// Group targets by package path
-	byPackage := make(map[string][]*generationTarget)
-	for _, target := range targets {
-		byPackage[target.pkgPath] = append(byPackage[target.pkgPath], target)
-	}
-
-	// Generate code for each package
-	for pkgPath, targets := range byPackage {
-		if err := generateForPackage(pkgPath, targets); err != nil {
-			fmt.Fprintf(os.Stderr, "Error generating for package %s: %v\n", pkgPath, err)
-			os.Exit(1)
-		}
-	}
-
-	fmt.Println("Generation completed successfully")
+	return nil, nil
 }
 
-// findStructsForGeneration scans all packages and returns generationTargets
-// for structs that have the "// generate:reset" comment.
-func findStructsForGeneration(pkgs []*packages.Package) []*generationTarget {
-	var targets []*generationTarget
+// findMainFunctions locates all main function declarations.
+func findMainFunctions(pass *analysis.Pass) map[*ast.FuncDecl]bool {
+	mainFuncs := make(map[*ast.FuncDecl]bool)
 
-	for _, pkg := range pkgs {
-		for i, file := range pkg.Syntax {
-			// Get the file path for this syntax tree
-			if i >= len(pkg.GoFiles) {
-				continue
+	for _, file := range pass.Files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			if fd, ok := n.(*ast.FuncDecl); ok && fd.Name.Name == "main" {
+				mainFuncs[fd] = true
 			}
-			filePath := pkg.GoFiles[i]
-
-			// Find all struct type declarations in this file
-			ast.Inspect(file, func(n ast.Node) bool {
-				genDecl, ok := n.(*ast.GenDecl)
-				if !ok || genDecl.Tok != token.TYPE {
-					return true
-				}
-
-				// Check if the type declaration has the special comment
-				if !hasGenerateResetComment(genDecl) {
-					return true
-				}
-
-				// Process each type spec in this declaration
-				for _, spec := range genDecl.Specs {
-					typeSpec, ok := spec.(*ast.TypeSpec)
-					if !ok {
-						continue
-					}
-
-					structType, ok := typeSpec.Type.(*ast.StructType)
-					if !ok {
-						// The comment is on a non-struct type - warn but continue
-						fmt.Printf("Warning: // generate:reset on non-struct type %s in %s\n",
-							typeSpec.Name.Name, filePath)
-						continue
-					}
-
-					targets = append(targets, &generationTarget{
-						pkgPath:    pkg.PkgPath,
-						pkgName:    pkg.Name,
-						structName: typeSpec.Name.Name,
-						structType: structType,
-						fileSet:    pkg.Fset,
-						outputDir:  filepath.Dir(filePath),
-					})
-				}
-				return true
-			})
-		}
+			return true
+		})
 	}
 
-	return targets
+	return mainFuncs
 }
 
-// hasGenerateResetComment checks if a GenDecl has the "// generate:reset" comment.
-func hasGenerateResetComment(decl *ast.GenDecl) bool {
-	if decl.Doc == nil {
+// isInMainNode checks if a node is inside a main function.
+func isInMainNode(pass *analysis.Pass, n ast.Node, mainFuncs map[*ast.FuncDecl]bool) bool {
+	if pass.Pkg.Name() != "main" {
 		return false
 	}
 
-	for _, comment := range decl.Doc.List {
-		if strings.TrimSpace(comment.Text) == "// generate:reset" {
+	// Get the position of the node
+	nodePos := pass.Fset.Position(n.Pos())
+
+	// Check each main function
+	for mainFunc := range mainFuncs {
+		start := pass.Fset.Position(mainFunc.Pos())
+		end := pass.Fset.Position(mainFunc.End())
+
+		// If in the same file and within line range, we're in main
+		if start.Filename == nodePos.Filename &&
+			nodePos.Line >= start.Line &&
+			nodePos.Line <= end.Line {
 			return true
 		}
 	}
+
 	return false
 }
 
-// generateForPackage creates the reset.gen.go file for a package with all
-// Reset() methods for structs in that package.
-func generateForPackage(pkgPath string, targets []*generationTarget) error {
-	if len(targets) == 0 {
-		return nil
+// checkPanic examines panic calls.
+func checkPanic(pass *analysis.Pass, call *ast.CallExpr) {
+	fun, ok := call.Fun.(*ast.Ident)
+	if !ok || fun.Name != "panic" {
+		return
 	}
 
-	var buf bytes.Buffer
-
-	// Write package header
-	buf.WriteString("// Code generated by reset generator; DO NOT EDIT.\n")
-	buf.WriteString("// go run ./cmd/reset\n\n")
-	buf.WriteString(fmt.Sprintf("package %s\n\n", targets[0].pkgName))
-
-	// Generate Reset method for each target
-	for _, target := range targets {
-		generateResetMethod(&buf, target)
+	obj := pass.TypesInfo.ObjectOf(fun)
+	if obj == nil || obj.Parent() != types.Universe {
+		return
 	}
 
-	// Format the generated code
-	formatted, err := format.Source(buf.Bytes())
-	if err != nil {
-		return fmt.Errorf("error formatting generated code: %w\nGenerated code:\n%s", err, buf.String())
-	}
-
-	// Write to reset.gen.go in the package directory
-	outputPath := filepath.Join(targets[0].outputDir, "reset.gen.go")
-	if err := os.WriteFile(outputPath, formatted, 0644); err != nil {
-		return fmt.Errorf("error writing to %s: %w", outputPath, err)
-	}
-
-	fmt.Printf("Generated %s for %d structs\n", outputPath, len(targets))
-	return nil
+	pass.Reportf(call.Pos(), "use of built-in panic function is discouraged")
 }
 
-// generateResetMethod writes the Reset() method for a single struct.
-func generateResetMethod(buf *bytes.Buffer, target *generationTarget) {
-	buf.WriteString(fmt.Sprintf("// Reset resets the %s struct to its zero state.\n", target.structName))
-	buf.WriteString(fmt.Sprintf("func (s *%s) Reset() {\n", target.structName))
-	buf.WriteString("\tif s == nil {\n")
-	buf.WriteString("\t\treturn\n")
-	buf.WriteString("\t}\n\n")
-
-	// Generate field resets
-	for _, field := range target.structType.Fields.List {
-		if len(field.Names) == 0 {
-			// Embedded field - handle specially
-			generateEmbeddedReset(buf, field)
-		} else {
-			// Regular field
-			for _, name := range field.Names {
-				// Skip unexported fields if needed? For now, generate for all
-				generateFieldReset(buf, name.Name, field.Type)
-			}
-		}
+// checkFatalExit examines log.Fatal and os.Exit calls.
+func checkFatalExit(pass *analysis.Pass, call *ast.CallExpr, mainFuncs map[*ast.FuncDecl]bool) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return
 	}
 
-	buf.WriteString("}\n\n")
-}
+	pkgIdent, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return
+	}
 
-// generateFieldReset writes code to reset a single struct field.
-func generateFieldReset(buf *bytes.Buffer, fieldName string, expr ast.Expr) {
-	switch t := expr.(type) {
-	case *ast.Ident:
-		// Basic types and type aliases
-		switch t.Name {
-		case "int", "int8", "int16", "int32", "int64",
-			"uint", "uint8", "uint16", "uint32", "uint64",
-			"float32", "float64", "complex64", "complex128":
-			buf.WriteString(fmt.Sprintf("\ts.%s = 0\n", fieldName))
-		case "string":
-			buf.WriteString(fmt.Sprintf("\ts.%s = \"\"\n", fieldName))
-		case "bool":
-			buf.WriteString(fmt.Sprintf("\ts.%s = false\n", fieldName))
-		default:
-			// Could be a type from the same package - try to call Reset if available
-			buf.WriteString(fmt.Sprintf("\t// Reset field %s of type %s\n", fieldName, t.Name))
-			buf.WriteString(fmt.Sprintf("\tif resetter, ok := interface{}(&s.%s).(interface{ Reset() }); ok {\n", fieldName))
-			buf.WriteString("\t\tresetter.Reset()\n")
-			buf.WriteString("\t} else {\n")
-			buf.WriteString(fmt.Sprintf("\t\t// TODO: manually reset field %s of type %s\n", fieldName, t.Name))
-			buf.WriteString("\t}\n")
-		}
+	// Use TypesInfo.Uses to get the actual object associated with the identifier
+	obj := pass.TypesInfo.Uses[pkgIdent]
+	if obj == nil {
+		return
+	}
 
-	case *ast.ArrayType:
-		// Slice or array
-		if t.Len == nil {
-			// Slice
-			buf.WriteString(fmt.Sprintf("\ts.%s = s.%s[:0]\n", fieldName, fieldName))
-		} else {
-			// Array - reset each element? For simplicity, just comment
-			buf.WriteString(fmt.Sprintf("\t// TODO: reset array field %s\n", fieldName))
-		}
+	// Get the package from the object
+	pkgObj, ok := obj.(*types.PkgName)
+	if !ok {
+		return
+	}
 
-	case *ast.MapType:
-		// Map - use clear() built-in function (Go 1.21+)
-		buf.WriteString(fmt.Sprintf("\tclear(s.%s)\n", fieldName))
-
-	case *ast.StarExpr:
-		// Pointer
-		buf.WriteString(fmt.Sprintf("\tif s.%s != nil {\n", fieldName))
-
-		// For pointer to basic type, we can set the value to zero
-		if ident, ok := t.X.(*ast.Ident); ok {
-			switch ident.Name {
-			case "int", "int8", "int16", "int32", "int64",
-				"uint", "uint8", "uint16", "uint32", "uint64",
-				"float32", "float64", "complex64", "complex128":
-				buf.WriteString(fmt.Sprintf("\t\t*s.%s = 0\n", fieldName))
-			case "string":
-				buf.WriteString(fmt.Sprintf("\t\t*s.%s = \"\"\n", fieldName))
-			case "bool":
-				buf.WriteString(fmt.Sprintf("\t\t*s.%s = false\n", fieldName))
-			default:
-				// Try to call Reset on the pointer's value
-				buf.WriteString(fmt.Sprintf("\t\tif resetter, ok := interface{}(s.%s).(interface{ Reset() }); ok {\n", fieldName))
-				buf.WriteString("\t\t\tresetter.Reset()\n")
-				buf.WriteString("\t\t} else {\n")
-				buf.WriteString(fmt.Sprintf("\t\t\t// TODO: manually reset pointer field %s\n", fieldName))
-				buf.WriteString("\t\t}\n")
-			}
-		} else {
-			// Complex pointer type - try to call Reset
-			buf.WriteString(fmt.Sprintf("\t\tif resetter, ok := interface{}(s.%s).(interface{ Reset() }); ok {\n", fieldName))
-			buf.WriteString("\t\t\tresetter.Reset()\n")
-			buf.WriteString("\t\t} else {\n")
-			buf.WriteString(fmt.Sprintf("\t\t\t// TODO: manually reset pointer field %s\n", fieldName))
-			buf.WriteString("\t\t}\n")
-		}
-		buf.WriteString("\t}\n")
-
-	case *ast.SelectorExpr:
-		// Type from another package
-		pkgName := t.X.(*ast.Ident).Name // Получаем имя пакета напрямую
-		typeName := t.Sel.Name           // Получаем имя типа напрямую
-		buf.WriteString(fmt.Sprintf("\t// Reset field %s of external type %s.%s\n", fieldName, pkgName, typeName))
-		buf.WriteString(fmt.Sprintf("\tif resetter, ok := interface{}(&s.%s).(interface{ Reset() }); ok {\n", fieldName))
-		buf.WriteString("\t\tresetter.Reset()\n")
-		buf.WriteString("\t} else {\n")
-		buf.WriteString(fmt.Sprintf("\t\t// TODO: manually reset external field %s\n", fieldName))
-		buf.WriteString("\t}\n")
-
+	var funcName string
+	pkgName := pkgObj.Imported().Name()
+	switch {
+	case pkgName == "log" && sel.Sel.Name == "Fatal":
+		funcName = "log.Fatal"
+	case pkgName == "os" && sel.Sel.Name == "Exit":
+		funcName = "os.Exit"
 	default:
-		// Unknown type
-		buf.WriteString(fmt.Sprintf("\t// TODO: reset field %s of unknown type\n", fieldName))
-	}
-}
-
-// generateEmbeddedReset handles embedded struct fields.
-func generateEmbeddedReset(buf *bytes.Buffer, field *ast.Field) {
-	// For embedded fields, we need to get the type
-	var typeName string
-	if ident, ok := field.Type.(*ast.Ident); ok {
-		typeName = ident.Name
-	} else if sel, ok := field.Type.(*ast.SelectorExpr); ok {
-		typeName = fmt.Sprintf("%s.%s", sel.X, sel.Sel)
-	} else {
-		typeName = "embedded"
+		return
 	}
 
-	buf.WriteString(fmt.Sprintf("\t// Reset embedded field of type %s\n", typeName))
-	buf.WriteString("\tif resetter, ok := interface{}(s).(interface{ Reset() }); ok {\n")
-	buf.WriteString("\t\tresetter.Reset()\n")
-	buf.WriteString("\t}\n")
+	// If not in main package - always report
+	if pass.Pkg.Name() != "main" {
+		pass.Reportf(call.Pos(), "call to %s outside of main package", funcName)
+		return
+	}
+
+	// Check if we're in main function
+	if !isInMainNode(pass, call, mainFuncs) {
+		pass.Reportf(call.Pos(), "call to %s outside of main() function", funcName)
+	}
 }

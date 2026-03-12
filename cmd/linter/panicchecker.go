@@ -69,8 +69,6 @@ func isInMainNode(pass *analysis.Pass, n ast.Node, mainFuncs map[*ast.FuncDecl]b
 	for mainFunc := range mainFuncs {
 		start := pass.Fset.Position(mainFunc.Pos())
 		end := pass.Fset.Position(mainFunc.End())
-
-		// If in the same file and within line range, we're in main
 		if start.Filename == nodePos.Filename &&
 			nodePos.Line >= start.Line &&
 			nodePos.Line <= end.Line {
