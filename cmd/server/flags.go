@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/SergeyDolin/metrics-and-alerting/internal/config"
 )
 
 // Server configuration variables that can be set via command-line flags
@@ -52,6 +54,14 @@ var (
 	// Audit events are POSTed to this URL as JSON.
 	// Can be set via flag "-audit-url" or environment variable "AUDIT_URL"
 	flagAuditURL string
+
+	// flagCryptoKey specifies the path to the private key file for asymmetric encryption.
+	// Can be set via flag "-crypto-key" or environment variable "CRYPTO_KEY"
+	flagCryptoKey string
+
+	// flagConfigPath specifies the path to the configuration file
+	// Can be set via flag "-c" or "-config" or environment variable "CONFIG"
+	flagConfigPath string
 )
 
 // parseFlags processes command-line arguments and environment variables
@@ -73,6 +83,7 @@ var (
 //   - KEY: HMAC secret key (overrides -k)
 //   - AUDIT_FILE: Path to audit log file (overrides -audit-file)
 //   - AUDIT_URL: URL for audit log endpoint (overrides -audit-url)
+//   - CRYPTO_KEY: Path to private key file for asymmetric encryption (overrides -crypto-key)
 //
 // This function should be called early in the server initialization process,
 // typically right after the main() function starts.
@@ -101,6 +112,13 @@ func parseFlags() {
 
 	// Audit log URL (empty by default, meaning no HTTP-based audit logging)
 	flag.StringVar(&flagAuditURL, "audit-url", "", "URL to send audit logs")
+
+	// Path to private key for asymmetric encryption (empty by default, meaning no encryption)
+	flag.StringVar(&flagCryptoKey, "crypto-key", "", "path to private key file for encryption")
+
+	// Path to configuration file (empty by default, meaning no config file is used)
+	flag.StringVar(&flagConfigPath, "c", "", "path to config file")
+	flag.StringVar(&flagConfigPath, "config", "", "path to config file (alternative flag)")
 
 	// Parse all defined command-line flags
 	flag.Parse()
@@ -162,5 +180,48 @@ func parseFlags() {
 		flagAuditURL = auditURL
 	} else {
 		log.Printf("AUDIT_URL not set")
+	}
+
+	// Override crypto key path from environment variable if provided
+	if cryptoKey, ok := os.LookupEnv("CRYPTO_KEY"); ok {
+		flagCryptoKey = cryptoKey
+	} else {
+		log.Printf("CRYPTO_KEY not set")
+	}
+
+	// Load configuration from file if provided
+	configPath := flagConfigPath
+	if envConfigPath := os.Getenv("CONFIG"); envConfigPath != "" {
+		configPath = envConfigPath
+	}
+
+	if configPath != "" {
+		serverConfig, err := config.LoadServerConfig(configPath)
+		if err == nil {
+			// Apply config values only if not already set by flags or environment variables
+			if flagRunAddr == "localhost:8080" {
+				flagRunAddr = serverConfig.Address
+			}
+			if flagStoreInterval == 300*time.Second {
+				storeInterval, err := time.ParseDuration(serverConfig.StoreInterval)
+				if err == nil {
+					flagStoreInterval = storeInterval
+				}
+			}
+			if flagFileStoragePath == "/tmp/metrics.json" {
+				flagFileStoragePath = serverConfig.StoreFile
+			}
+			if !flagRestore {
+				flagRestore = serverConfig.Restore
+			}
+			if flagSQL == "" {
+				flagSQL = serverConfig.DatabaseDSN
+			}
+			if flagCryptoKey == "" {
+				flagCryptoKey = serverConfig.CryptoKey
+			}
+		} else {
+			log.Printf("Failed to load config file: %v", err)
+		}
 	}
 }

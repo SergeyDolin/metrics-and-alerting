@@ -127,8 +127,8 @@ func main() {
 	// Set up signal handling for graceful shutdown
 	// Create a channel to receive OS signals
 	sigChan := make(chan os.Signal, 1)
-	// Notify the channel on SIGINT (Ctrl+C) and SIGTERM (termination signal)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	// Notify the channel on SIGINT (Ctrl+C), SIGTERM (termination signal), and SIGQUIT
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
 	// Block until a signal is received
 	<-sigChan
