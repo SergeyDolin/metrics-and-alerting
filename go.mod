@@ -1,6 +1,6 @@
 module github.com/SergeyDolin/metrics-and-alerting
 
-go 1.25
+go 1.24.0
 
 require (
 	github.com/go-chi/chi v1.5.5
