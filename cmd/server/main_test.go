@@ -239,8 +239,8 @@ func Test_updateJSONHandler(t *testing.T) {
 
 func Test_valueJSONHandler(t *testing.T) {
 	store := storage.NewMemStorage()
-	store.UpdateGauge(context.Background(), "Temperature", 25.5)
-	store.UpdateCounter(context.Background(), "PollCount", 42)
+	store.UpdateGauge(t.Context(), "Temperature", 25.5)
+	store.UpdateCounter(t.Context(), "PollCount", 42)
 
 	router := chi.NewRouter()
 	oldFlagKey := flagKey
@@ -454,8 +454,8 @@ func Test_batchUpdateHandler_Gzip(t *testing.T) {
 
 func Test_getHandler(t *testing.T) {
 	store := storage.NewMemStorage()
-	store.UpdateGauge(context.Background(), "Temperature", 25.5)
-	store.UpdateCounter(context.Background(), "PollCount", 42)
+	store.UpdateGauge(t.Context(), "Temperature", 25.5)
+	store.UpdateCounter(t.Context(), "PollCount", 42)
 
 	router := chi.NewRouter()
 	router.Get("/value/{type}/{name}", getHandler(store, nil))
@@ -506,8 +506,8 @@ func Test_getHandler(t *testing.T) {
 
 func Test_indexHandler(t *testing.T) {
 	store := storage.NewMemStorage()
-	store.UpdateGauge(context.Background(), "Temperature", 25.5)
-	store.UpdateCounter(context.Background(), "PollCount", 42)
+	store.UpdateGauge(t.Context(), "Temperature", 25.5)
+	store.UpdateCounter(t.Context(), "PollCount", 42)
 
 	router := chi.NewRouter()
 	router.Get("/", indexHandler(store))

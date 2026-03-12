@@ -220,7 +220,7 @@ func main() {
 		}
 	}()
 
-	// Block until a signal is received
+	// Block until a signal is received (context is canceled)
 	<-ctx.Done()
 	sugar.Info("Shutdown signal received")
 
