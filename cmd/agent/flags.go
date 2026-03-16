@@ -5,11 +5,21 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
+
+	"github.com/SergeyDolin/metrics-and-alerting/internal/config"
 )
 
 // Command-line flags and environment variables configuration for the metrics agent.
 // The agent supports configuration through both command-line flags and environment variables,
 // with environment variables taking precedence when both are provided.
+
+const (
+	// DefaultReportInterval is the default interval for reporting metrics to the server (in seconds)
+	DefaultReportInterval = 10
+	// DefaultPollInterval is the default interval for polling metrics from the system (in seconds)
+	DefaultPollInterval = 2
+)
 
 var (
 	// sAddr specifies the server address and port to send metrics to.
@@ -19,13 +29,13 @@ var (
 
 	// pInterval defines how often metrics are polled from the system (in seconds).
 	// Can be set via command-line flag "-p" or environment variable "POLL_INTERVAL".
-	// Default value: 2 seconds
-	pInterval = flag.Int("p", 2, "pollInterval set")
+	// Default value: DefaultPollInterval seconds
+	pInterval = flag.Int("p", DefaultPollInterval, "pollInterval set")
 
 	// rInterval defines how often collected metrics are reported to the server (in seconds).
 	// Can be set via command-line flag "-r" or environment variable "REPORT_INTERVAL".
-	// Default value: 10 seconds
-	rInterval = flag.Int("r", 10, "reportInterval set")
+	// Default value: DefaultReportInterval seconds
+	rInterval = flag.Int("r", DefaultReportInterval, "reportInterval set")
 
 	// key is the secret key used for HMAC-SHA256 signing of requests to ensure data integrity.
 	// Can be set via command-line flag "-k" or environment variable "KEY".
@@ -36,6 +46,17 @@ var (
 	// Can be set via command-line flag "-l" or environment variable "RATE_LIMIT".
 	// Default value: 1 (single concurrent request)
 	rateLimit = flag.Int("l", 1, "rate limit set")
+
+	// cryptoKey specifies the path to the public key file for asymmetric encryption.
+	// Can be set via command-line flag "-crypto-key" or environment variable "CRYPTO_KEY".
+	// Default value: empty string (no encryption)
+	cryptoKey = flag.String("crypto-key", "", "path to public key file for encryption")
+
+	// configPath specifies the path to the configuration file
+	// Can be set via command-line flag "-c" or "-config" or environment variable "CONFIG".
+	// Default value: empty string (no config file)
+	configPath = flag.String("c", "", "path to config file")
+	_          = flag.String("config", "", "path to config file (alternative flag)")
 )
 
 // parseArgs processes command-line arguments and environment variables to configure the agent.
@@ -48,6 +69,7 @@ var (
 //   - REPORT_INTERVAL: Overrides the reporting interval (overrides -r flag)
 //   - KEY: Overrides the HMAC secret key (overrides -k flag)
 //   - RATE_LIMIT: Overrides the rate limit (overrides -l flag)
+//   - CRYPTO_KEY: Overrides the path to the public key file (overrides -crypto-key flag)
 //
 // The function logs warnings when:
 //   - Environment variables are not set (informational)
@@ -105,5 +127,45 @@ func parseArgs() {
 		}
 	} else {
 		log.Printf("%s not set\n", rateLim)
+	}
+
+	// Override crypto key path from environment variable if provided
+	if cryptoKeyOs, ok := os.LookupEnv("CRYPTO_KEY"); ok {
+		*cryptoKey = cryptoKeyOs
+	} else {
+		log.Printf("%s not set\n", cryptoKeyOs)
+	}
+
+	// Load configuration from file if provided
+	configFilePath := *configPath
+	if envConfigPath := os.Getenv("CONFIG"); envConfigPath != "" {
+		configFilePath = envConfigPath
+	}
+
+	if configFilePath != "" {
+		agentConfig, err := config.LoadAgentConfig(configFilePath)
+		if err == nil {
+			// Apply config values only if not already set by flags or environment variables
+			if *sAddr == "localhost:8080" {
+				*sAddr = agentConfig.Address
+			}
+			if *rInterval == DefaultReportInterval {
+				reportInterval, err := time.ParseDuration(agentConfig.ReportInterval)
+				if err == nil {
+					*rInterval = int(reportInterval.Seconds())
+				}
+			}
+			if *pInterval == DefaultPollInterval {
+				pollInterval, err := time.ParseDuration(agentConfig.PollInterval)
+				if err == nil {
+					*pInterval = int(pollInterval.Seconds())
+				}
+			}
+			if *cryptoKey == "" {
+				*cryptoKey = agentConfig.CryptoKey
+			}
+		} else {
+			log.Printf("Failed to load config file: %v", err)
+		}
 	}
 }

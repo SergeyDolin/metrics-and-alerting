@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -10,6 +9,8 @@ import (
 	"time"
 
 	_ "net/http/pprof" // Import for side effects: enables pprof profiling endpoints
+
+	"go.uber.org/zap"
 )
 
 // Build information variables - set during compilation with ldflags
@@ -46,13 +47,20 @@ func printBuildInfo() {
 // The agent continues running until it receives a termination signal,
 // at which point it ensures all queued metrics are processed before exiting.
 func main() {
+	// Initialize structured logger for the application
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		logger.Fatal("cannot initialize zap")
+	}
+	defer logger.Sync() // Flush any buffered log entries
+	log := logger.Sugar()
 	// Print build information on startup for debugging and traceability
 	printBuildInfo()
 	// Start pprof profiling server in a separate goroutine
 	// This provides performance profiling endpoints at http://localhost:8081/debug/pprof/
 	go func() {
-		log.Println("pprof server started on :8081")
-		log.Println(http.ListenAndServe("localhost:8081", nil))
+		log.Infoln("pprof server started on :8081")
+		log.Infoln(http.ListenAndServe("localhost:8081", nil))
 	}()
 
 	// Initialize HTTP client for sending metrics to the server
@@ -127,12 +135,12 @@ func main() {
 	// Set up signal handling for graceful shutdown
 	// Create a channel to receive OS signals
 	sigChan := make(chan os.Signal, 1)
-	// Notify the channel on SIGINT (Ctrl+C) and SIGTERM (termination signal)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	// Notify the channel on SIGINT (Ctrl+C), SIGTERM (termination signal), and SIGQUIT
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
 	// Block until a signal is received
 	<-sigChan
-	log.Printf("Shutdown signal received, waiting for workers to finish.")
+	log.Infoln("Shutdown signal received, waiting for workers to finish.")
 
 	// Stop the worker pool - no new metrics will be processed
 	pool.Stop()
@@ -149,5 +157,5 @@ func main() {
 	}
 
 	// Log completion and exit
-	log.Println("Agent shutdown complete.")
+	log.Infoln("Agent shutdown complete.")
 }
