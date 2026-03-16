@@ -19,6 +19,7 @@ type ServerConfig struct {
 	CryptoKey     string   `json:"crypto_key"`
 	StoreInterval string   `json:"store_interval"`
 	DB            DBConfig `json:"db"`
+	TrustedSubnet string   `json:"trusted_subnet,omitempty"`
 }
 
 // AgentConfig represents the agent configuration structure

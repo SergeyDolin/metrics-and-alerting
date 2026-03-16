@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 
@@ -60,6 +61,7 @@ func sendMetric(client *http.Client, name, typeMetric string, value string, serv
 // sendRequest is a helper function that sends an HTTP POST request with gzip compression.
 // It compresses the provided body using gzip, adds appropriate headers, and includes
 // a HMAC-SHA256 hash if a secret key is configured.
+// It also adds the X-Real-IP header containing the agent's host IP address.
 //
 // Parameters:
 //   - client: HTTP client used to send the request
@@ -109,6 +111,12 @@ func sendRequest(client *http.Client, url string, body []byte) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
 
+	// Add X-Real-IP header with the agent's host IP address
+	agentIP := getHostIP()
+	if agentIP != "" {
+		req.Header.Set("X-Real-IP", agentIP)
+	}
+
 	if *key != "" {
 		hash := sha256.ComputeHMACSHA256(body, *key)
 		req.Header.Set("HashSHA256", hash)
@@ -128,6 +136,27 @@ func sendRequest(client *http.Client, url string, body []byte) error {
 		}
 	}
 	return nil
+}
+
+// getHostIP returns the IP address of the current host.
+// It iterates through network interfaces and returns the first non-loopback IPv4 address found.
+// Returns an empty string if no valid IP address is found.
+func getHostIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+
+	for _, addr := range addrs {
+		// Check if the address is a valid IP network
+		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+			// Return IPv4 address
+			if ipNet.IP.To4() != nil {
+				return ipNet.IP.String()
+			}
+		}
+	}
+	return ""
 }
 
 // sendMetricJSON sends a single metric to the server in JSON format.

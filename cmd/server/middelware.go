@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -226,6 +227,53 @@ func (w *conditionalGzipResponseWriter) WriteHeader(statusCode int) {
 		// No compression
 		w.ResponseWriter.WriteHeader(statusCode)
 	}
+}
+
+// trustedSubnetMiddleware checks if the agent's IP address (from X-Real-IP header)
+// is within the trusted subnet specified by flagTrustedSubnet.
+// If flagTrustedSubnet is empty, no check is performed and all requests are allowed.
+// If the IP is not in the trusted subnet, returns HTTP 403 Forbidden.
+//
+// Returns:
+//   - func(http.Handler) http.Handler: Middleware function
+func trustedSubnetMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip validation if trusted subnet is not configured
+		if flagTrustedSubnet == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Get the agent's IP from X-Real-IP header
+		agentIP := r.Header.Get("X-Real-IP")
+		if agentIP == "" {
+			http.Error(w, "X-Real-IP header required", http.StatusBadRequest)
+			return
+		}
+
+		// Parse the trusted subnet
+		_, ipNet, err := net.ParseCIDR(flagTrustedSubnet)
+		if err != nil {
+			http.Error(w, "Invalid trusted subnet configuration", http.StatusInternalServerError)
+			return
+		}
+
+		// Parse the agent's IP
+		ip := net.ParseIP(agentIP)
+		if ip == nil {
+			http.Error(w, "Invalid IP address in X-Real-IP header", http.StatusBadRequest)
+			return
+		}
+
+		// Check if the IP is within the trusted subnet
+		if !ipNet.Contains(ip) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
+		// IP is trusted, continue to next handler
+		next.ServeHTTP(w, r)
+	})
 }
 
 // hashVerificationMiddleware verifies HMAC-SHA256 signatures on incoming requests.

@@ -62,6 +62,11 @@ var (
 	// flagConfigPath specifies the path to the configuration file
 	// Can be set via flag "-c" or "-config" or environment variable "CONFIG"
 	flagConfigPath string
+
+	// flagTrustedSubnet specifies the trusted subnet in CIDR notation for agent IP validation.
+	// If set, only agents with IPs in this subnet are allowed to send metrics.
+	// Can be set via flag "-t" or environment variable "TRUSTED_SUBNET"
+	flagTrustedSubnet string
 )
 
 // parseFlags processes command-line arguments and environment variables
@@ -120,8 +125,17 @@ func parseFlags() {
 	flag.StringVar(&flagConfigPath, "c", "", "path to config file")
 	flag.StringVar(&flagConfigPath, "config", "", "path to config file (alternative flag)")
 
+	// Trusted subnet in CIDR notation for agent IP validation (empty by default, meaning no IP restrictions)
+	flag.StringVar(&flagTrustedSubnet, "t", "", "trusted subnet in CIDR notation for agent IP validation")
 	// Parse all defined command-line flags
 	flag.Parse()
+
+	// Override trusted subnet from environment variable if provided
+	if trustedSubnet, ok := os.LookupEnv("TRUSTED_SUBNET"); ok {
+		flagTrustedSubnet = trustedSubnet
+	} else {
+		log.Printf("TRUSTED_SUBNET not set\n")
+	}
 
 	// Override server address from environment variable if provided
 	if address, ok := os.LookupEnv("ADDRESS"); ok {
@@ -219,6 +233,9 @@ func parseFlags() {
 			}
 			if flagCryptoKey == "" {
 				flagCryptoKey = serverConfig.CryptoKey
+			}
+			if flagTrustedSubnet == "" {
+				flagTrustedSubnet = serverConfig.TrustedSubnet
 			}
 		} else {
 			log.Printf("Failed to load config file: %v", err)

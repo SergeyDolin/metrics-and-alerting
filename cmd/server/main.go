@@ -170,6 +170,10 @@ func main() {
 	// Apply global middleware to all routes
 	router.Use(middleware.StripSlashes) // Remove trailing slashes from URLs
 	router.Use(gzipMiddleware)          // Support gzip compression for requests/responses
+	if flagTrustedSubnet != "" {
+		// Add trusted subnet validation middleware if configured
+		router.Use(trustedSubnetMiddleware)
+	}
 	if flagKey != "" {
 		// Add HMAC signature verification middleware if key is configured
 		router.Use(hashVerificationMiddleware)
