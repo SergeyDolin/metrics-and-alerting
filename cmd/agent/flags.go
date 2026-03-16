@@ -14,6 +14,13 @@ import (
 // The agent supports configuration through both command-line flags and environment variables,
 // with environment variables taking precedence when both are provided.
 
+const (
+	// DefaultReportInterval is the default interval for reporting metrics to the server (in seconds)
+	DefaultReportInterval = 10
+	// DefaultPollInterval is the default interval for polling metrics from the system (in seconds)
+	DefaultPollInterval = 2
+)
+
 var (
 	// sAddr specifies the server address and port to send metrics to.
 	// Can be set via command-line flag "-a" or environment variable "ADDRESS".
@@ -22,13 +29,13 @@ var (
 
 	// pInterval defines how often metrics are polled from the system (in seconds).
 	// Can be set via command-line flag "-p" or environment variable "POLL_INTERVAL".
-	// Default value: 2 seconds
-	pInterval = flag.Int("p", 2, "pollInterval set")
+	// Default value: DefaultPollInterval seconds
+	pInterval = flag.Int("p", DefaultPollInterval, "pollInterval set")
 
 	// rInterval defines how often collected metrics are reported to the server (in seconds).
 	// Can be set via command-line flag "-r" or environment variable "REPORT_INTERVAL".
-	// Default value: 10 seconds
-	rInterval = flag.Int("r", 10, "reportInterval set")
+	// Default value: DefaultReportInterval seconds
+	rInterval = flag.Int("r", DefaultReportInterval, "reportInterval set")
 
 	// key is the secret key used for HMAC-SHA256 signing of requests to ensure data integrity.
 	// Can be set via command-line flag "-k" or environment variable "KEY".
@@ -142,13 +149,13 @@ func parseArgs() {
 			if *sAddr == "localhost:8080" {
 				*sAddr = agentConfig.Address
 			}
-			if *rInterval == 10 {
+			if *rInterval == DefaultReportInterval {
 				reportInterval, err := time.ParseDuration(agentConfig.ReportInterval)
 				if err == nil {
 					*rInterval = int(reportInterval.Seconds())
 				}
 			}
-			if *pInterval == 2 {
+			if *pInterval == DefaultPollInterval {
 				pollInterval, err := time.ParseDuration(agentConfig.PollInterval)
 				if err == nil {
 					*pInterval = int(pollInterval.Seconds())

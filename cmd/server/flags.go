@@ -215,7 +215,7 @@ func parseFlags() {
 				flagRestore = serverConfig.Restore
 			}
 			if flagSQL == "" {
-				flagSQL = serverConfig.DatabaseDSN
+				flagSQL = serverConfig.DB.DSN
 			}
 			if flagCryptoKey == "" {
 				flagCryptoKey = serverConfig.CryptoKey

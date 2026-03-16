@@ -6,14 +6,19 @@ import (
 	"os"
 )
 
+// DBConfig represents database configuration
+type DBConfig struct {
+	DSN string `json:"dsn"`
+}
+
 // ServerConfig represents the server configuration structure
 type ServerConfig struct {
-	Address       string `json:"address"`
-	Restore       bool   `json:"restore"`
-	StoreInterval string `json:"store_interval"`
-	StoreFile     string `json:"store_file"`
-	DatabaseDSN   string `json:"database_dsn"`
-	CryptoKey     string `json:"crypto_key"`
+	Address       string   `json:"address"`
+	Restore       bool     `json:"restore"`
+	StoreFile     string   `json:"store_file"`
+	CryptoKey     string   `json:"crypto_key"`
+	StoreInterval string   `json:"store_interval"`
+	DB            DBConfig `json:"db"`
 }
 
 // AgentConfig represents the agent configuration structure
