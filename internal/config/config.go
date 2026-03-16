@@ -14,6 +14,7 @@ type DBConfig struct {
 // ServerConfig represents the server configuration structure
 type ServerConfig struct {
 	Address       string   `json:"address"`
+	GRPCAddr      string   `json:"grpc_addr,omitempty"`
 	Restore       bool     `json:"restore"`
 	StoreFile     string   `json:"store_file"`
 	CryptoKey     string   `json:"crypto_key"`
@@ -25,6 +26,7 @@ type ServerConfig struct {
 // AgentConfig represents the agent configuration structure
 type AgentConfig struct {
 	Address        string `json:"address"`
+	GRPCAddr       string `json:"grpc_addr,omitempty"`
 	ReportInterval string `json:"report_interval"`
 	PollInterval   string `json:"poll_interval"`
 	CryptoKey      string `json:"crypto_key"`

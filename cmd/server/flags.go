@@ -67,6 +67,9 @@ var (
 	// If set, only agents with IPs in this subnet are allowed to send metrics.
 	// Can be set via flag "-t" or environment variable "TRUSTED_SUBNET"
 	flagTrustedSubnet string
+
+	// flagGRPCAddr specifies the gRPC server address
+	flagGRPCAddr string
 )
 
 // parseFlags processes command-line arguments and environment variables
@@ -130,6 +133,10 @@ func parseFlags() {
 	// Parse all defined command-line flags
 	flag.Parse()
 
+	// Override gRPC address from environment variable if provided
+	if grpcAddr, ok := os.LookupEnv("GRPC_ADDR"); ok {
+		flagGRPCAddr = grpcAddr
+	}
 	// Override trusted subnet from environment variable if provided
 	if trustedSubnet, ok := os.LookupEnv("TRUSTED_SUBNET"); ok {
 		flagTrustedSubnet = trustedSubnet

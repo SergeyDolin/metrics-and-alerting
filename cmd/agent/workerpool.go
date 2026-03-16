@@ -20,13 +20,15 @@ import (
 //
 // generate:reset
 type WorkerPool struct {
-	workers    int                // Number of concurrent worker goroutines
-	queue      *MetricQueue       // Shared queue containing metrics to be processed
-	client     *http.Client       // HTTP client for sending requests
-	serverAddr string             // Address of the monitoring server
-	wg         sync.WaitGroup     // WaitGroup for tracking worker goroutines
-	ctx        context.Context    // Context for signaling shutdown
-	cancel     context.CancelFunc // Function to cancel the context
+	workers    int
+	queue      *MetricQueue
+	client     *http.Client
+	grpcClient *GRPCClient
+	serverAddr string
+	useGRPC    bool
+	wg         sync.WaitGroup
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 // NewWorkerPool creates and initializes a new WorkerPool with the specified parameters.
@@ -39,13 +41,15 @@ type WorkerPool struct {
 //
 // Returns:
 //   - *WorkerPool: A configured worker pool ready to be started
-func NewWorkerPool(workers int, queue *MetricQueue, client *http.Client, serverAddr string) *WorkerPool {
+func NewWorkerPool(workers int, queue *MetricQueue, client *http.Client, grpcClient *GRPCClient, serverAddr string) *WorkerPool {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &WorkerPool{
 		workers:    workers,
 		queue:      queue,
 		client:     client,
+		grpcClient: grpcClient,
 		serverAddr: serverAddr,
+		useGRPC:    grpcClient != nil,
 		ctx:        ctx,
 		cancel:     cancel,
 	}
@@ -102,20 +106,23 @@ func (wp *WorkerPool) worker(id int) {
 //   - id: Worker ID for logging purposes
 //   - metric: Pointer to the Metrics object to be sent
 func (wp *WorkerPool) processMetric(id int, metric *Metrics) {
-	// Return the metric to the pool after processing to reduce allocations
 	defer wp.queue.pool.Put(metric)
 
-	// Attempt to send the metric with retry logic for transient failures
-	err := retryWithBackoff(func() error {
-		// Different handling based on metric type (gauge vs counter)
-		if metric.MType == "gauge" {
-			return sendMetricJSON(wp.client, metric.ID, metric.MType, wp.serverAddr, metric.Value, nil)
-		} else {
-			return sendMetricJSON(wp.client, metric.ID, metric.MType, wp.serverAddr, nil, metric.Delta)
-		}
-	})
+	var err error
+	if wp.useGRPC {
+		err = retryWithBackoff(func() error {
+			return wp.grpcClient.SendMetricsBatch([]Metrics{*metric})
+		})
+	} else {
+		err = retryWithBackoff(func() error {
+			if metric.MType == "gauge" {
+				return sendMetricJSON(wp.client, metric.ID, metric.MType, wp.serverAddr, metric.Value, nil)
+			} else {
+				return sendMetricJSON(wp.client, metric.ID, metric.MType, wp.serverAddr, nil, metric.Delta)
+			}
+		})
+	}
 
-	// Log any failures after all retry attempts
 	if err != nil {
 		log.Printf("Worker %d: Failed to send metric %s: %v\n", id, metric.ID, err)
 	}

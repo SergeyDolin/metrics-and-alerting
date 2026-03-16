@@ -3,13 +3,20 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
+	"net"
 	"net/http"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/SergeyDolin/metrics-and-alerting/internal/proto"
 	"github.com/SergeyDolin/metrics-and-alerting/internal/storage"
 	"github.com/go-chi/chi"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"go.uber.org/zap"
 
@@ -167,6 +174,11 @@ func main() {
 		defer auditPublisher.Close() // Ensure all audit logs are flushed on shutdown
 	}
 
+	// Start gRPC server if address is configured
+	if flagGRPCAddr != "" {
+		go startGRPCServer(flagGRPCAddr, store, saveSync, auditPublisher, flagTrustedSubnet)
+	}
+
 	// Apply global middleware to all routes
 	router.Use(middleware.StripSlashes) // Remove trailing slashes from URLs
 	router.Use(gzipMiddleware)          // Support gzip compression for requests/responses
@@ -247,4 +259,67 @@ func main() {
 	// Start the HTTP server
 	sugar.Infof("Running server on %s", flagRunAddr)
 	sugar.Fatal(http.ListenAndServe(flagRunAddr, router))
+}
+
+// startGRPCServer starts the gRPC server
+func startGRPCServer(addr string, store storage.Storage, saveFunc func(), auditPublisher *Publisher, trustedSubnet string) {
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("Failed to listen for gRPC: %v", err)
+	}
+
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(subnetInterceptor(trustedSubnet)),
+	)
+
+	metricsServer := NewGRPCServer(store, saveFunc, auditPublisher, trustedSubnet)
+	proto.RegisterMetricsServer(grpcServer, metricsServer)
+
+	log.Printf("Starting gRPC server on %s", addr)
+	if err := grpcServer.Serve(lis); err != nil {
+		log.Fatalf("Failed to serve gRPC: %v", err)
+	}
+}
+
+// subnetInterceptor creates a unary interceptor for trusted subnet validation
+func subnetInterceptor(trustedSubnet string) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		if trustedSubnet == "" {
+			return handler(ctx, req)
+		}
+
+		md, ok := metadata.FromIncomingContext(ctx)
+		if !ok {
+			return nil, status.Error(codes.PermissionDenied, "metadata not found")
+		}
+
+		// Get client IP from metadata
+		var clientIP string
+		if values := md.Get("x-real-ip"); len(values) > 0 {
+			clientIP = values[0]
+		}
+
+		if clientIP == "" {
+			return nil, status.Error(codes.PermissionDenied, "client IP not found in metadata")
+		}
+
+		// Parse trusted subnet
+		_, ipNet, err := net.ParseCIDR(trustedSubnet)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "invalid trusted subnet configuration")
+		}
+
+		// Parse client IP
+		ip := net.ParseIP(clientIP)
+		if ip == nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid IP address format")
+		}
+
+		// Check if IP is in trusted subnet
+		if !ipNet.Contains(ip) {
+			return nil, status.Error(codes.PermissionDenied, "IP address not in trusted subnet")
+		}
+
+		return handler(ctx, req)
+	}
 }
