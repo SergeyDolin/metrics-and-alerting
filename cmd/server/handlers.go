@@ -18,6 +18,7 @@ import (
 	"github.com/SergeyDolin/metrics-and-alerting/internal/metrics"
 	"github.com/SergeyDolin/metrics-and-alerting/internal/sha256"
 	"github.com/SergeyDolin/metrics-and-alerting/internal/storage"
+	"github.com/SergeyDolin/metrics-and-alerting/internal/subnet"
 )
 
 // MetricType represents the type of metric (gauge or counter).
@@ -111,6 +112,16 @@ func getHandler(store storage.Storage, auditPublisher *Publisher) func(http.Resp
 
 		metricType := strings.ToLower(chi.URLParam(req, "type"))
 		metricName := chi.URLParam(req, "name")
+
+		if auditPublisher != nil {
+			ipAddress := subnet.ExtractIPFromRequest(req)
+			event := AuditEvent{
+				Timestamp: time.Now().Unix(),
+				Metrics:   []string{metricName},
+				IPAddress: ipAddress,
+			}
+			auditPublisher.Notify(event)
+		}
 
 		switch metricType {
 		case "gauge":

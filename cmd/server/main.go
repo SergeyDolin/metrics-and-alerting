@@ -12,10 +12,10 @@ import (
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/proto"
 	"github.com/SergeyDolin/metrics-and-alerting/internal/storage"
+	"github.com/SergeyDolin/metrics-and-alerting/internal/subnet"
 	"github.com/go-chi/chi"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"go.uber.org/zap"
@@ -87,6 +87,11 @@ func main() {
 	// Storage interface and save function for metrics persistence
 	var store storage.Storage
 	var saveSync func()
+
+	subnetValidator, err := subnet.NewValidator(flagTrustedSubnet)
+	if err != nil {
+		sugar.Fatalf("Invalid trusted subnet: %v", err)
+	}
 
 	// Configure storage backend based on flags
 	if flagSQL != "" {
@@ -175,16 +180,15 @@ func main() {
 	}
 
 	// Start gRPC server if address is configured
-	if flagGRPCAddr != "" {
-		go startGRPCServer(flagGRPCAddr, store, saveSync, auditPublisher, flagTrustedSubnet)
+	if flagTrustedSubnet != "" {
+		router.Use(trustedSubnetMiddleware(subnetValidator))
 	}
 
 	// Apply global middleware to all routes
 	router.Use(middleware.StripSlashes) // Remove trailing slashes from URLs
 	router.Use(gzipMiddleware)          // Support gzip compression for requests/responses
-	if flagTrustedSubnet != "" {
-		// Add trusted subnet validation middleware if configured
-		router.Use(trustedSubnetMiddleware)
+	if flagGRPCAddr != "" {
+		go startGRPCServer(flagGRPCAddr, store, saveSync, auditPublisher, subnetValidator)
 	}
 	if flagKey != "" {
 		// Add HMAC signature verification middleware if key is configured
@@ -262,17 +266,17 @@ func main() {
 }
 
 // startGRPCServer starts the gRPC server
-func startGRPCServer(addr string, store storage.Storage, saveFunc func(), auditPublisher *Publisher, trustedSubnet string) {
+func startGRPCServer(addr string, store storage.Storage, saveFunc func(), auditPublisher *Publisher, validator *subnet.Validator) {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("Failed to listen for gRPC: %v", err)
 	}
 
 	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(subnetInterceptor(trustedSubnet)),
+		grpc.UnaryInterceptor(subnetInterceptor(validator)),
 	)
 
-	metricsServer := NewGRPCServer(store, saveFunc, auditPublisher, trustedSubnet)
+	metricsServer := NewGRPCServer(store, saveFunc, auditPublisher, validator)
 	proto.RegisterMetricsServer(grpcServer, metricsServer)
 
 	log.Printf("Starting gRPC server on %s", addr)
@@ -282,41 +286,18 @@ func startGRPCServer(addr string, store storage.Storage, saveFunc func(), auditP
 }
 
 // subnetInterceptor creates a unary interceptor for trusted subnet validation
-func subnetInterceptor(trustedSubnet string) grpc.UnaryServerInterceptor {
+func subnetInterceptor(validator *subnet.Validator) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		if trustedSubnet == "" {
+		if validator == nil {
 			return handler(ctx, req)
 		}
 
-		md, ok := metadata.FromIncomingContext(ctx)
-		if !ok {
-			return nil, status.Error(codes.PermissionDenied, "metadata not found")
-		}
-
-		// Get client IP from metadata
-		var clientIP string
-		if values := md.Get("x-real-ip"); len(values) > 0 {
-			clientIP = values[0]
-		}
-
+		clientIP := subnet.ExtractIPFromGRPCContext(ctx)
 		if clientIP == "" {
 			return nil, status.Error(codes.PermissionDenied, "client IP not found in metadata")
 		}
 
-		// Parse trusted subnet
-		_, ipNet, err := net.ParseCIDR(trustedSubnet)
-		if err != nil {
-			return nil, status.Error(codes.Internal, "invalid trusted subnet configuration")
-		}
-
-		// Parse client IP
-		ip := net.ParseIP(clientIP)
-		if ip == nil {
-			return nil, status.Error(codes.InvalidArgument, "invalid IP address format")
-		}
-
-		// Check if IP is in trusted subnet
-		if !ipNet.Contains(ip) {
+		if !validator.IsTrusted(clientIP) {
 			return nil, status.Error(codes.PermissionDenied, "IP address not in trusted subnet")
 		}
 

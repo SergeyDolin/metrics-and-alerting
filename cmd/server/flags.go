@@ -130,8 +130,15 @@ func parseFlags() {
 
 	// Trusted subnet in CIDR notation for agent IP validation (empty by default, meaning no IP restrictions)
 	flag.StringVar(&flagTrustedSubnet, "t", "", "trusted subnet in CIDR notation for agent IP validation")
+	flag.StringVar(&flagGRPCAddr, "grpc-addr", "", "gRPC server address")
 	// Parse all defined command-line flags
 	flag.Parse()
+
+	if envGRPCAddr := os.Getenv("GRPC_ADDR"); envGRPCAddr != "" {
+		flagGRPCAddr = envGRPCAddr
+	} else if flagGRPCAddr == "" {
+		log.Printf("GRPC_ADDR not set, gRPC server will not be started")
+	}
 
 	// Override gRPC address from environment variable if provided
 	if grpcAddr, ok := os.LookupEnv("GRPC_ADDR"); ok {
