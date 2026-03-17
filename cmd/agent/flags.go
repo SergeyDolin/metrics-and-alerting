@@ -57,6 +57,9 @@ var (
 	// Default value: empty string (no config file)
 	configPath = flag.String("c", "", "path to config file")
 	_          = flag.String("config", "", "path to config file (alternative flag)")
+
+	// grpcAddr specifies the gRPC server address
+	grpcAddr = flag.String("grpc-addr", "", "gRPC server address (if empty, use HTTP)")
 )
 
 // parseArgs processes command-line arguments and environment variables to configure the agent.
@@ -81,6 +84,11 @@ var (
 func parseArgs() {
 	// Parse command-line flags with their default values
 	flag.Parse()
+
+	// Override gRPC address from environment variable if provided
+	if grpcAddrOs, ok := os.LookupEnv("GRPC_ADDR"); ok {
+		*grpcAddr = grpcAddrOs
+	}
 
 	// Override server address from environment variable if provided
 	if addressOs, ok := os.LookupEnv("ADDRESS"); ok {

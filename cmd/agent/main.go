@@ -69,13 +69,23 @@ func main() {
 	// Parse configuration from flags and environment variables
 	parseArgs()
 
-	// Create a buffered queue for metrics with capacity of 100 items
-	// This queue acts as a buffer between metric collection and sending
+	// Initialize gRPC client if address is provided
+	var grpcClient *GRPCClient
+	if *grpcAddr != "" {
+		var err error
+		grpcClient, err = NewGRPCClient(*grpcAddr)
+		if err != nil {
+			log.Fatalf("Failed to create gRPC client: %v", err)
+		}
+		defer grpcClient.Close()
+		log.Infof("gRPC client initialized, connecting to %s", *grpcAddr)
+	}
+
+	// Create a buffered queue for metrics
 	queue := NewMetricQueue(100)
 
-	// Create and start a worker pool for concurrent metric processing
-	// The pool size is determined by the rateLimit configuration
-	pool := NewWorkerPool(*rateLimit, queue, &client, *sAddr)
+	// Create and start worker pool
+	pool := NewWorkerPool(*rateLimit, queue, &client, grpcClient, *sAddr)
 	pool.Start()
 
 	// Start metric collection goroutine
@@ -145,7 +155,7 @@ func main() {
 	// Stop the worker pool - no new metrics will be processed
 	pool.Stop()
 
-	// Allow time for in-flight requests to complete
+	// Allo	w time for in-flight requests to complete
 	time.Sleep(time.Duration(*pInterval) * time.Second)
 
 	// Process any remaining metrics in the queue synchronously

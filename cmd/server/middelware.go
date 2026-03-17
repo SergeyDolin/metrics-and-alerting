@@ -12,6 +12,7 @@ import (
 
 	"github.com/SergeyDolin/metrics-and-alerting/internal/crypto"
 	"github.com/SergeyDolin/metrics-and-alerting/internal/sha256"
+	"github.com/SergeyDolin/metrics-and-alerting/internal/subnet"
 )
 
 // responseData holds metadata about the HTTP response for logging purposes.
@@ -225,6 +226,37 @@ func (w *conditionalGzipResponseWriter) WriteHeader(statusCode int) {
 	} else {
 		// No compression
 		w.ResponseWriter.WriteHeader(statusCode)
+	}
+}
+
+// trustedSubnetMiddleware checks if the agent's IP address (from X-Real-IP header)
+// is within the trusted subnet specified by flagTrustedSubnet.
+// If flagTrustedSubnet is empty, no check is performed and all requests are allowed.
+// If the IP is not in the trusted subnet, returns HTTP 403 Forbidden.
+//
+// Returns:
+//   - func(http.Handler) http.Handler: Middleware function
+func trustedSubnetMiddleware(validator *subnet.Validator) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if validator == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			agentIP := subnet.ExtractIPFromRequest(r)
+			if agentIP == "" {
+				http.Error(w, "X-Real-IP header required", http.StatusBadRequest)
+				return
+			}
+
+			if !validator.IsTrusted(agentIP) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 
